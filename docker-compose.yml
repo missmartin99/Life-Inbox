@@ -1,0 +1,33 @@
+# Private-beta local composition. Does NOT publicly deploy or purchase infra.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: lifeinbox
+      POSTGRES_PASSWORD: lifeinbox
+      POSTGRES_DB: lifeinbox
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      LIFE_INBOX_ENV: beta
+      DATABASE_URL: postgresql+psycopg://lifeinbox:lifeinbox@db:5432/lifeinbox
+      LIFE_INBOX_UPLOAD_DIR: /data/uploads
+      LIFE_INBOX_SESSION_SECRET: change-me-to-a-long-random-secret-value
+      LIFE_INBOX_ALLOW_DEV_LOGIN: "0"
+      LIFE_INBOX_AUTH_MODE: google_stub
+      LIFE_INBOX_TIMEZONE: UTC
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      - db
+
+volumes:
+  pgdata:
+  uploads:

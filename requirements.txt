@@ -1,0 +1,13 @@
+fastapi
+python-multipart
+uvicorn
+pydantic
+sqlalchemy
+alembic
+openai
+requests
+pytest
+httpx
+pypdf
+Pillow
+psycopg[binary]

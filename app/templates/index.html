@@ -1,0 +1,175 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Life Inbox</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <h1>Life Inbox</h1>
+    <p class="sub">Capture first. Organize the whole inbox with AI when you are ready.</p>
+    <div class="auth-bar">
+      <span id="authUser" class="muted">Checking session…</span>
+      <form id="devLoginForm" class="auth-form" onsubmit="devLogin(event)">
+        <label>
+          Dev login email
+          <input id="devLoginEmail" type="email" maxlength="200" placeholder="you@example.com" required />
+        </label>
+        <button type="submit" class="secondary">Sign in</button>
+        <button type="button" class="secondary" onclick="logoutSession()">Sign out</button>
+      </form>
+      <p id="authStatus" class="status muted" role="status" aria-live="polite"></p>
+    </div>
+
+    <textarea id="noteText" placeholder="Example: Met Rohan yesterday. He recommended Atomic Habits. Need to order it this weekend. Also ask him about that Gurgaon restaurant."></textarea>
+    <br />
+    <button id="addNoteButton" type="button" onclick="addNote()">Add Note</button>
+    <div class="url-capture">
+      <label for="urlText">Capture URL</label>
+      <input id="urlText" type="url" maxlength="2000" placeholder="https://example.com/article" />
+      <button id="addUrlButton" type="button" class="secondary" onclick="addUrl()">Save URL</button>
+    </div>
+    <div class="pdf-capture">
+      <label for="pdfFile">Upload PDF</label>
+      <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
+      <button id="addPdfButton" type="button" class="secondary" onclick="addPdf()">Upload PDF</button>
+    </div>
+    <div class="image-capture">
+      <label for="imageFile">Upload image / screenshot</label>
+      <input id="imageFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" />
+      <button id="addImageButton" type="button" class="secondary" onclick="addImage()">Upload image</button>
+    </div>
+    <div class="voice-capture">
+      <label for="voiceFile">Voice note</label>
+      <div class="voice-actions">
+        <button id="recordVoiceButton" type="button" class="secondary" onclick="toggleVoiceRecording()">Record</button>
+        <input id="voiceFile" type="file" accept="audio/*,video/webm,.webm,.wav,.mp3,.m4a,.ogg" />
+        <button id="addVoiceButton" type="button" class="secondary" onclick="addVoice()">Upload audio</button>
+      </div>
+      <p id="voiceStatus" class="status muted" role="status" aria-live="polite"></p>
+    </div>
+    <button id="analyzeButton" type="button" class="secondary" onclick="analyzeInbox()">Analyze Entire Inbox with AI</button>
+    <p id="noteStatus" class="status muted" role="status" aria-live="polite"></p>
+
+    <h2>Ask My Inbox</h2>
+    <p class="sub">Search and ask questions grounded in your saved notes, URLs, and PDFs.</p>
+    <form id="askForm" class="ask-form" onsubmit="askInbox(event)">
+      <label>
+        Question
+        <input id="askQuestion" type="search" maxlength="500" placeholder="What did I plan about car insurance?" required />
+      </label>
+      <div class="ask-examples">
+        <button type="button" class="secondary" onclick="fillAskExample('What deadlines or renewals did I mention?')">Renewals</button>
+        <button type="button" class="secondary" onclick="fillAskExample('What books or articles should I read?')">Reading list</button>
+        <button type="button" class="secondary" onclick="fillAskExample('What restaurant recommendations do I have?')">Restaurants</button>
+      </div>
+      <button type="submit" id="askButton">Ask</button>
+    </form>
+    <p id="askStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="askOutput" class="panel ask-output">
+      <span class="muted">Answers cite inbox items. If evidence is weak, Life Inbox says so instead of guessing.</span>
+    </div>
+
+    <h2>Organized dashboard</h2>
+    <p id="dashboardStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="dashboard" class="dashboard">
+      <span class="muted">Analyze your inbox to populate topics, priorities, and related items.</span>
+    </div>
+
+    <h2>Topics / spaces</h2>
+    <form id="topicForm" class="topic-form" onsubmit="createTopic(event)">
+      <label>
+        New topic
+        <input id="topicName" maxlength="80" placeholder="e.g. Home projects" required />
+      </label>
+      <button type="submit">Add topic</button>
+    </form>
+    <p id="topicStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="topics"></div>
+
+    <h2>AI-organized inbox</h2>
+    <p id="analysisStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="aiOutput" class="panel">
+      <span class="muted">Save a few notes, then click “Analyze Entire Inbox with AI”. Saved analysis reloads on refresh and is marked stale if the inbox changes.</span>
+    </div>
+
+    <h2>Attention</h2>
+    <p class="sub">Today, upcoming, overdue, and unscheduled open tasks. Dates keep the original phrase and require confirmation when ambiguous.</p>
+    <p id="briefingStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="briefing" class="panel">
+      <span class="muted">Open tasks with timing appear here after analysis.</span>
+    </div>
+    <div id="attention" class="dashboard"></div>
+    <p id="calendarStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="calendarPreview" class="panel">
+      <span class="muted">Calendar previews require confirmation and never write to Google without owner approval.</span>
+    </div>
+
+    <h2>Tasks</h2>
+    <div class="task-toolbar">
+      <label for="taskStatusFilter">Show</label>
+      <select id="taskStatusFilter" onchange="changeTaskStatusFilter()">
+        <option value="open">Open</option>
+        <option value="completed">Completed</option>
+        <option value="dismissed">Dismissed</option>
+      </select>
+    </div>
+    <p id="taskStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="tasks"></div>
+
+    <h2>Raw saved notes</h2>
+    <form id="itemSearchForm" class="search-toolbar" onsubmit="applyItemFilters(event)">
+      <label>
+        Search
+        <input id="itemSearch" type="search" maxlength="200" placeholder="Text or title" />
+      </label>
+      <label>
+        Type
+        <select id="itemTypeFilter">
+          <option value="">All</option>
+          <option value="text">Text</option>
+          <option value="url">URL</option>
+          <option value="pdf">PDF</option>
+          <option value="image">Image</option>
+          <option value="voice">Voice</option>
+        </select>
+      </label>
+      <label>
+        Category
+        <select id="categoryFilter">
+          <option value="">All</option>
+        </select>
+      </label>
+      <label>
+        Priority
+        <select id="priorityFilter">
+          <option value="">All</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+      </label>
+      <label>
+        Processing
+        <select id="processingStatusFilter">
+          <option value="">All</option>
+          <option value="ready">Ready</option>
+          <option value="processing">Processing</option>
+          <option value="failed">Failed</option>
+        </select>
+      </label>
+      <div class="search-actions">
+        <button type="submit">Search</button>
+        <button type="button" class="secondary" onclick="clearItemFilters()">Clear</button>
+      </div>
+    </form>
+    <p id="searchStatus" class="status muted" role="status" aria-live="polite"></p>
+    <div id="notes"></div>
+  </div>
+
+  <script src="/static/pagination_state.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
