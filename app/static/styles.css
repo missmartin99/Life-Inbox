@@ -239,6 +239,7 @@ a:hover { background-size: 100% 1px; color: #fff; }
 .auth-form { display: grid; gap: 12px; }
 .auth-actions { display: flex; gap: 8px; }
 .auth-actions button { flex: 1; }
+.auth-bar [hidden] { display: none !important; }
 
 /* ---------- Buttons ---------- */
 button {

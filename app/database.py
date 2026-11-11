@@ -2,8 +2,9 @@ import hashlib
 import json
 import os
 import re
+import secrets
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -15,16 +16,20 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     ForeignKey,
+    Index,
     Integer,
     Text,
     UniqueConstraint,
     create_engine,
+    delete,
     event,
     func,
     or_,
     select,
+    update,
 )
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.capture.pipeline import (
@@ -54,11 +59,26 @@ AUTO_CREATE_TABLES = os.getenv(
 
 def _connect_args(database_url: str) -> dict:
     if database_url.startswith("sqlite"):
-        return {"check_same_thread": False}
+        # `timeout` makes concurrent writers wait instead of failing at once.
+        return {"check_same_thread": False, "timeout": 15}
     return {}
 
 
-engine = create_engine(DATABASE_URL, connect_args=_connect_args(DATABASE_URL))
+def _engine_kwargs(database_url: str) -> dict:
+    if database_url.startswith("sqlite"):
+        return {}
+    return {
+        "pool_pre_ping": True,
+        "pool_size": int(os.getenv("LIFE_INBOX_DB_POOL_SIZE", "10") or "10"),
+        "max_overflow": int(os.getenv("LIFE_INBOX_DB_MAX_OVERFLOW", "20") or "20"),
+    }
+
+
+engine = create_engine(
+    DATABASE_URL,
+    connect_args=_connect_args(DATABASE_URL),
+    **_engine_kwargs(DATABASE_URL),
+)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base = declarative_base()
 
@@ -69,6 +89,13 @@ def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
     if dbapi_connection.__class__.__module__.startswith("sqlite3"):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=15000")
+        try:
+            # WAL lets readers and one writer work at the same time.
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+        except Exception:  # pragma: no cover - e.g. read-only media
+            pass
         cursor.close()
 
 
@@ -88,6 +115,7 @@ class UserRecord(Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("email", name="uq_users_email"),
+        Index("ix_users_google_sub", "google_sub", unique=True),
         {"sqlite_autoincrement": True},
     )
 
@@ -96,6 +124,32 @@ class UserRecord(Base):
     display_name = Column(Text, nullable=False)
     auth_provider = Column(Text, nullable=False)
     created_at = Column(Text, nullable=False)
+    google_sub = Column(Text, nullable=True)
+    last_login_at = Column(Text, nullable=True)
+
+
+class AuthSessionRecord(Base):
+    """Server-side login session. Only a hash of the cookie token is stored."""
+
+    __tablename__ = "auth_sessions"
+    __table_args__ = (
+        Index("ix_auth_sessions_token_hash", "token_hash", unique=True),
+        Index("ix_auth_sessions_user_id", "user_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    token_hash = Column(Text, nullable=False)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at = Column(Text, nullable=False)
+    expires_at = Column(Text, nullable=False)
+    last_seen_at = Column(Text, nullable=False)
+    revoked_at = Column(Text, nullable=True)
+    user_agent = Column(Text, nullable=True)
 
 
 class InboxItemRecord(Base):
@@ -345,11 +399,262 @@ def get_or_create_default_owner_id() -> int:
     return user["id"]
 
 
+class AuthRequiredError(Exception):
+    """Raised when data is accessed without a signed-in user."""
+
+
+class AnalysisAlreadyRunningError(Exception):
+    """Raised when this user already has an analysis in progress."""
+
+
 def require_owner_id() -> int:
     owner = get_current_owner_id()
     if owner is not None:
         return owner
-    return get_or_create_default_owner_id()
+    from app.config import load_config
+
+    if load_config(strict=False).local_anonymous_allowed:
+        return get_or_create_default_owner_id()
+    raise AuthRequiredError("Authentication required.")
+
+
+def _get_owned_item(session, item_id: int):
+    """Fetch an inbox item only if the current user owns it."""
+    item = session.get(InboxItemRecord, item_id)
+    if item is None or item.owner_user_id != require_owner_id():
+        return None
+    return item
+
+
+def task_is_owned(task_id: int) -> bool:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        task = session.get(TaskRecord, task_id)
+        return task is not None and task.owner_user_id == owner_id
+
+
+SESSION_TTL = timedelta(days=14)
+SESSION_TOUCH_INTERVAL = timedelta(minutes=5)
+
+
+def _hash_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def create_auth_session(user_id: int, user_agent: Optional[str] = None) -> str:
+    """Create a login session and return the raw cookie token."""
+    raw_token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as session:
+        session.execute(
+            delete(AuthSessionRecord).where(
+                AuthSessionRecord.expires_at < now.isoformat()
+            )
+        )
+        session.add(
+            AuthSessionRecord(
+                token_hash=_hash_token(raw_token),
+                user_id=user_id,
+                created_at=now.isoformat(),
+                expires_at=(now + SESSION_TTL).isoformat(),
+                last_seen_at=now.isoformat(),
+                user_agent=(user_agent or "")[:300] or None,
+            )
+        )
+        session.commit()
+    return raw_token
+
+
+def get_user_for_session_token(raw_token: Optional[str]) -> Optional[dict]:
+    """Return the user for a valid, unexpired, unrevoked session token."""
+    if not raw_token or len(raw_token) > 200:
+        return None
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as session:
+        row = session.scalar(
+            select(AuthSessionRecord).where(
+                AuthSessionRecord.token_hash == _hash_token(raw_token)
+            )
+        )
+        if row is None or row.revoked_at is not None:
+            return None
+        if datetime.fromisoformat(row.expires_at) <= now:
+            return None
+        user = session.get(UserRecord, row.user_id)
+        if user is None:
+            return None
+        if now - datetime.fromisoformat(row.last_seen_at) > SESSION_TOUCH_INTERVAL:
+            row.last_seen_at = now.isoformat()
+            session.commit()
+        return _user_to_dict(user)
+
+
+def revoke_auth_session(raw_token: Optional[str]) -> bool:
+    if not raw_token:
+        return False
+    with SessionLocal() as session:
+        row = session.scalar(
+            select(AuthSessionRecord).where(
+                AuthSessionRecord.token_hash == _hash_token(raw_token)
+            )
+        )
+        if row is None or row.revoked_at is not None:
+            return False
+        row.revoked_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return True
+
+
+def revoke_all_auth_sessions(user_id: int) -> int:
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(AuthSessionRecord).where(
+                AuthSessionRecord.user_id == user_id,
+                AuthSessionRecord.revoked_at.is_(None),
+            )
+        ).all()
+        for row in rows:
+            row.revoked_at = now
+        session.commit()
+        return len(rows)
+
+
+def upsert_google_user(*, sub: str, email: str, name: Optional[str]) -> dict:
+    """Find or create the user for a verified Google identity.
+
+    Accounts are matched on Google's stable `sub`. An existing account with
+    the same (verified) email is linked on first Google login.
+    """
+    cleaned = email.strip().lower()
+    if not sub or not cleaned or cleaned == DEFAULT_OWNER_EMAIL:
+        raise ValueError("Invalid Google identity.")
+    for attempt in range(2):
+        now = datetime.now(timezone.utc).isoformat()
+        with SessionLocal() as session:
+            try:
+                user = session.scalar(
+                    select(UserRecord).where(UserRecord.google_sub == sub)
+                )
+                if user is None:
+                    user = session.scalar(
+                        select(UserRecord).where(UserRecord.email == cleaned)
+                    )
+                    if user is not None:
+                        if user.google_sub and user.google_sub != sub:
+                            raise ValueError(
+                                "This email belongs to a different Google account."
+                            )
+                        user.google_sub = sub
+                        user.auth_provider = "google"
+                if user is None:
+                    user = UserRecord(
+                        email=cleaned,
+                        display_name=(name or "").strip() or cleaned.split("@")[0],
+                        auth_provider="google",
+                        created_at=now,
+                        google_sub=sub,
+                        last_login_at=now,
+                    )
+                    session.add(user)
+                else:
+                    if user.email != cleaned and session.scalar(
+                        select(UserRecord.id).where(UserRecord.email == cleaned)
+                    ) is None:
+                        user.email = cleaned
+                    user.last_login_at = now
+                session.flush()
+                ensure_default_topics(session, owner_user_id=user.id)
+                session.commit()
+                return _user_to_dict(user)
+            except IntegrityError:
+                session.rollback()
+                if attempt == 1:
+                    raise
+    raise RuntimeError("unreachable")  # pragma: no cover
+
+
+_OWNED_MODELS = (
+    ("inbox_items", InboxItemRecord),
+    ("tasks", TaskRecord),
+    ("analysis_runs", AnalysisRunRecord),
+    ("topics", TopicRecord),
+)
+
+
+def count_owned_data(user_id: int) -> dict:
+    """How many rows of each owned kind belong to this user."""
+    with SessionLocal() as session:
+        return {
+            name: session.scalar(
+                select(func.count())
+                .select_from(model)
+                .where(model.owner_user_id == user_id)
+            )
+            or 0
+            for name, model in _OWNED_MODELS
+        }
+
+
+def transfer_owned_data(from_user_id: int, to_user_id: int) -> dict:
+    """Move everything one user owns to another user, in one transaction.
+
+    Used to claim the anonymous Local Owner's inbox after switching to Google
+    sign-in. Topics with the same name are merged (insights are re-pointed),
+    because topic names are unique per owner. Uploaded files need no move:
+    storage paths are not per-user.
+    """
+    if from_user_id == to_user_id:
+        raise ValueError("Source and target user are the same.")
+    with SessionLocal() as session:
+        if session.get(UserRecord, from_user_id) is None:
+            raise ValueError(f"Unknown source user {from_user_id}.")
+        if session.get(UserRecord, to_user_id) is None:
+            raise ValueError(f"Unknown target user {to_user_id}.")
+
+        target_topics = {
+            topic.name: topic
+            for topic in session.scalars(
+                select(TopicRecord).where(TopicRecord.owner_user_id == to_user_id)
+            ).all()
+        }
+        topics_moved = 0
+        topics_merged = 0
+        source_topics = session.scalars(
+            select(TopicRecord).where(TopicRecord.owner_user_id == from_user_id)
+        ).all()
+        for topic in source_topics:
+            existing = target_topics.get(topic.name)
+            if existing is None:
+                topic.owner_user_id = to_user_id
+                target_topics[topic.name] = topic
+                topics_moved += 1
+                continue
+            session.execute(
+                update(ItemInsightRecord)
+                .where(ItemInsightRecord.topic_id == topic.id)
+                .values(topic_id=existing.id)
+            )
+            session.execute(
+                update(ItemInsightRecord)
+                .where(ItemInsightRecord.user_topic_id == topic.id)
+                .values(user_topic_id=existing.id)
+            )
+            session.delete(topic)
+            topics_merged += 1
+
+        moved = {"topics_moved": topics_moved, "topics_merged": topics_merged}
+        for name, model in _OWNED_MODELS:
+            if model is TopicRecord:
+                continue
+            result = session.execute(
+                update(model)
+                .where(model.owner_user_id == from_user_id)
+                .values(owner_user_id=to_user_id)
+            )
+            moved[name] = result.rowcount or 0
+        session.commit()
+        return moved
 
 
 def ensure_default_topics(session, owner_user_id: Optional[int] = None) -> None:
@@ -737,6 +1042,23 @@ def start_analysis_run() -> int:
     started_at = datetime.now(timezone.utc).isoformat()
     owner_id = require_owner_id()
     with SessionLocal() as session:
+        stale_before = datetime.now(timezone.utc) - timedelta(minutes=10)
+        running = session.scalars(
+            select(AnalysisRunRecord).where(
+                AnalysisRunRecord.owner_user_id == owner_id,
+                AnalysisRunRecord.status == ANALYSIS_RUNNING,
+            )
+        ).all()
+        for existing in running:
+            if datetime.fromisoformat(existing.started_at) < stale_before:
+                # A crashed run must not block the user forever.
+                existing.status = ANALYSIS_FAILED
+                existing.mode = "error"
+                existing.completed_at = started_at
+            else:
+                raise AnalysisAlreadyRunningError(
+                    "An analysis is already running."
+                )
         run = AnalysisRunRecord(
             started_at=started_at,
             status=ANALYSIS_RUNNING,
@@ -792,16 +1114,21 @@ def complete_analysis_run(
     completed_at = datetime.now(timezone.utc).isoformat()
     with SessionLocal() as session:
         run = session.get(AnalysisRunRecord, run_id)
-        if run is None or run.status != ANALYSIS_RUNNING:
+        owner_id = require_owner_id()
+        if (
+            run is None
+            or run.status != ANALYSIS_RUNNING
+            or run.owner_user_id != owner_id
+        ):
             raise ValueError("Analysis run is not available for completion")
 
-        ensure_default_topics(session)
+        ensure_default_topics(session, owner_user_id=owner_id)
 
         for bucket in result["buckets"]:
             topic_id = _topic_id_by_name(session, bucket["name"])
             for analyzed_item in bucket["notes"]:
                 item_id = analyzed_item["id"]
-                if session.get(InboxItemRecord, item_id) is None:
+                if _get_owned_item(session, item_id) is None:
                     raise ValueError(
                         f"Analysis references missing item {item_id}"
                     )
@@ -825,7 +1152,7 @@ def complete_analysis_run(
                 )
                 insight.needs_review = 0
                 insight.updated_at = completed_at
-                item = session.get(InboxItemRecord, item_id)
+                item = _get_owned_item(session, item_id)
                 if item is not None and insight.user_title is None:
                     item.title = analyzed_item["title"]
 
@@ -834,7 +1161,7 @@ def complete_analysis_run(
             if not source_item_ids:
                 continue
             for item_id in source_item_ids:
-                if session.get(InboxItemRecord, item_id) is None:
+                if _get_owned_item(session, item_id) is None:
                     raise ValueError(
                         f"Task references missing item {item_id}"
                     )
@@ -1003,7 +1330,11 @@ def fail_analysis_run(run_id: int) -> None:
     completed_at = datetime.now(timezone.utc).isoformat()
     with SessionLocal() as session:
         run = session.get(AnalysisRunRecord, run_id)
-        if run is None or run.status != ANALYSIS_RUNNING:
+        if (
+            run is None
+            or run.status != ANALYSIS_RUNNING
+            or run.owner_user_id != require_owner_id()
+        ):
             return
         run.completed_at = completed_at
         run.status = ANALYSIS_FAILED
@@ -1153,7 +1484,7 @@ def complete_pdf_item_processing(
     mime_type: Optional[str],
 ) -> Optional[dict]:
     with SessionLocal() as session:
-        item = session.get(InboxItemRecord, item_id)
+        item = _get_owned_item(session, item_id)
         if item is None:
             return None
         item.title = title
@@ -1199,7 +1530,7 @@ def complete_image_item_processing(
     mime_type: Optional[str],
 ) -> Optional[dict]:
     with SessionLocal() as session:
-        item = session.get(InboxItemRecord, item_id)
+        item = _get_owned_item(session, item_id)
         if item is None:
             return None
         item.title = title
@@ -1245,7 +1576,7 @@ def complete_voice_item_processing(
     mime_type: Optional[str],
 ) -> Optional[dict]:
     with SessionLocal() as session:
-        item = session.get(InboxItemRecord, item_id)
+        item = _get_owned_item(session, item_id)
         if item is None:
             return None
         item.title = title
@@ -1266,7 +1597,7 @@ def update_item_extracted_text(
     """User edit of extracted/OCR/transcript text (facts), preserving AI description."""
     cleaned = extracted_text.strip()
     with SessionLocal() as session:
-        item = session.get(InboxItemRecord, item_id)
+        item = _get_owned_item(session, item_id)
         if item is None:
             return None
         if item.item_type not in {IMAGE_ITEM_TYPE, VOICE_ITEM_TYPE, PDF_ITEM_TYPE}:
@@ -1303,7 +1634,7 @@ def add_url_item_to_db(url: str) -> dict:
 
 def mark_item_processing(item_id: int) -> Optional[dict]:
     with SessionLocal() as session:
-        item = session.get(InboxItemRecord, item_id)
+        item = _get_owned_item(session, item_id)
         if item is None:
             return None
         item.processing_status = STATUS_PROCESSING
@@ -1322,7 +1653,7 @@ def complete_url_item_processing(
     final_url: Optional[str] = None,
 ) -> Optional[dict]:
     with SessionLocal() as session:
-        item = session.get(InboxItemRecord, item_id)
+        item = _get_owned_item(session, item_id)
         if item is None:
             return None
         item.title = title
@@ -1340,7 +1671,7 @@ def complete_url_item_processing(
 
 def fail_item_processing(item_id: int, error_message: str) -> Optional[dict]:
     with SessionLocal() as session:
-        item = session.get(InboxItemRecord, item_id)
+        item = _get_owned_item(session, item_id)
         if item is None:
             return None
         item.processing_status = STATUS_FAILED
@@ -1706,6 +2037,8 @@ def _insight_to_dict(insight: ItemInsightRecord) -> dict:
 
 def get_item_insight(item_id: int) -> Optional[dict]:
     with SessionLocal() as session:
+        if _get_owned_item(session, item_id) is None:
+            return None
         insight = session.get(ItemInsightRecord, item_id)
         if insight is None:
             return None
@@ -1722,6 +2055,8 @@ def update_item_insight_overrides(
     needs_review: Optional[bool] = None,
 ) -> Optional[dict]:
     with SessionLocal() as session:
+        if _get_owned_item(session, item_id) is None:
+            return None
         insight = session.get(ItemInsightRecord, item_id)
         if insight is None:
             return None
@@ -1734,7 +2069,8 @@ def update_item_insight_overrides(
             if user_title is not None:
                 insight.user_title = user_title
             if user_topic_id is not None:
-                if session.get(TopicRecord, user_topic_id) is None:
+                topic = session.get(TopicRecord, user_topic_id)
+                if topic is None or topic.owner_user_id != require_owner_id():
                     raise ValueError("Topic not found")
                 insight.user_topic_id = user_topic_id
             if user_priority is not None:
@@ -1746,7 +2082,7 @@ def update_item_insight_overrides(
         if needs_review is not None:
             insight.needs_review = 1 if needs_review else 0
         insight.updated_at = datetime.now(timezone.utc).isoformat()
-        item = session.get(InboxItemRecord, item_id)
+        item = _get_owned_item(session, item_id)
         if item is not None and insight.user_title:
             item.title = insight.user_title
         session.commit()
@@ -1756,9 +2092,18 @@ def update_item_insight_overrides(
 def list_relations_from_db(
     include_dismissed: bool = False,
 ) -> list[dict]:
+    owner_id = require_owner_id()
     with SessionLocal() as session:
-        statement = select(ItemRelationRecord).order_by(
-            ItemRelationRecord.id.asc()
+        owned_ids = select(InboxItemRecord.id).where(
+            InboxItemRecord.owner_user_id == owner_id
+        )
+        statement = (
+            select(ItemRelationRecord)
+            .where(
+                ItemRelationRecord.item_id_a.in_(owned_ids),
+                ItemRelationRecord.item_id_b.in_(owned_ids),
+            )
+            .order_by(ItemRelationRecord.id.asc())
         )
         if not include_dismissed:
             statement = statement.where(ItemRelationRecord.dismissed == 0)
@@ -1782,6 +2127,11 @@ def dismiss_relation_in_db(relation_id: int) -> Optional[dict]:
         row = session.get(ItemRelationRecord, relation_id)
         if row is None:
             return None
+        if (
+            _get_owned_item(session, row.item_id_a) is None
+            or _get_owned_item(session, row.item_id_b) is None
+        ):
+            return None
         row.dismissed = 1
         session.commit()
         return {
@@ -1797,17 +2147,27 @@ def dismiss_relation_in_db(relation_id: int) -> Optional[dict]:
 
 def get_organization_dashboard() -> dict:
     with SessionLocal() as session:
-        ensure_default_topics(session)
+        owner_id = require_owner_id()
+        ensure_default_topics(session, owner_user_id=owner_id)
         session.commit()
         topics = list_topics_from_db()
         insights = {
             insight.item_id: _insight_to_dict(insight)
-            for insight in session.scalars(select(ItemInsightRecord)).all()
+            for insight in session.scalars(
+                select(ItemInsightRecord)
+                .join(
+                    InboxItemRecord,
+                    InboxItemRecord.id == ItemInsightRecord.item_id,
+                )
+                .where(InboxItemRecord.owner_user_id == owner_id)
+            ).all()
         }
         items = [
             _item_to_dict(item)
             for item in session.scalars(
-                select(InboxItemRecord).order_by(InboxItemRecord.id.desc())
+                select(InboxItemRecord)
+                .where(InboxItemRecord.owner_user_id == owner_id)
+                .order_by(InboxItemRecord.id.desc())
             ).all()
         ]
         high_priority = []

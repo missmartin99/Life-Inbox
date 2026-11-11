@@ -57,14 +57,17 @@
           <div class="auth-bar">
             <div class="mono eyebrow-sm">Session</div>
             <span id="authUser" class="muted">Checking session…</span>
-            <form id="devLoginForm" class="auth-form" onsubmit="devLogin(event)">
+            <div id="authActions" class="auth-actions auth-actions-stack" hidden>
+              <button type="button" class="secondary" onclick="logoutSession()">Sign out</button>
+              <button type="button" class="secondary" onclick="logoutEverywhere()">Sign out everywhere</button>
+            </div>
+            <form id="devLoginForm" class="auth-form" onsubmit="devLogin(event)" hidden>
               <label>
-                Dev login email
+                Dev login email (local only)
                 <input id="devLoginEmail" type="email" maxlength="200" placeholder="you@example.com" required />
               </label>
               <div class="auth-actions">
                 <button type="submit" class="secondary">Sign in</button>
-                <button type="button" class="secondary" onclick="logoutSession()">Sign out</button>
               </div>
             </form>
             <p id="authStatus" class="status muted" role="status" aria-live="polite"></p>

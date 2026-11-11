@@ -1,4 +1,10 @@
 # Private-beta local composition. Does NOT publicly deploy or purchase infra.
+#
+# Beta mode requires real Google sign-in. Put these in a `.env` file next to
+# this one (Compose reads it automatically; it is gitignored) — see
+# .env.example and docs/deployment.md:
+#   LIFE_INBOX_SESSION_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+#   LIFE_INBOX_PUBLIC_URL (https://...), optional LIFE_INBOX_ALLOWED_EMAILS
 services:
   db:
     image: postgres:16-alpine
@@ -19,9 +25,14 @@ services:
       LIFE_INBOX_ENV: beta
       DATABASE_URL: postgresql+psycopg://lifeinbox:lifeinbox@db:5432/lifeinbox
       LIFE_INBOX_UPLOAD_DIR: /data/uploads
-      LIFE_INBOX_SESSION_SECRET: change-me-to-a-long-random-secret-value
+      LIFE_INBOX_SESSION_SECRET: ${LIFE_INBOX_SESSION_SECRET:?set a 32+ character LIFE_INBOX_SESSION_SECRET}
       LIFE_INBOX_ALLOW_DEV_LOGIN: "0"
-      LIFE_INBOX_AUTH_MODE: google_stub
+      LIFE_INBOX_AUTH_MODE: google
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?set GOOGLE_CLIENT_SECRET}
+      LIFE_INBOX_PUBLIC_URL: ${LIFE_INBOX_PUBLIC_URL:?set the https:// address users open}
+      LIFE_INBOX_ALLOWED_EMAILS: ${LIFE_INBOX_ALLOWED_EMAILS:-}
+      LIFE_INBOX_ALLOWED_EMAIL_DOMAINS: ${LIFE_INBOX_ALLOWED_EMAIL_DOMAINS:-}
       LIFE_INBOX_TIMEZONE: UTC
     volumes:
       - uploads:/data/uploads

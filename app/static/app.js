@@ -119,12 +119,26 @@ function clearItemFilters() {
   loadNotes();
 }
 
+let authRedirecting = false;
+
+function redirectToLogin() {
+  if (authRedirecting) return;
+  authRedirecting = true;
+  window.location.assign('/login');
+}
+
 async function fetchJson(url, options, friendlyError) {
   let response;
   try {
     response = await fetch(url, options);
   } catch {
     throw new Error(friendlyError);
+  }
+
+  if (response.status === 401) {
+    // Session missing, expired, or revoked (e.g. "sign out everywhere").
+    redirectToLogin();
+    throw new Error('Your session has ended. Please sign in again.');
   }
 
   if (!response.ok) {
@@ -1106,13 +1120,27 @@ async function askInbox(event) {
   }
 }
 
+async function loadAuthOptions() {
+  try {
+    return await fetchJson('/api/auth/options', {}, 'Unable to load sign-in options.');
+  } catch {
+    return {google_enabled: false, dev_login_enabled: false, local_anonymous: false};
+  }
+}
+
 async function loadAuthUser() {
+  const options = await loadAuthOptions();
+  document.getElementById('devLoginForm').hidden = !options.dev_login_enabled;
+  const actions = document.getElementById('authActions');
   try {
     const user = await fetchJson('/api/auth/me', {}, 'Unable to load session.');
     document.getElementById('authUser').textContent =
       `Signed in as ${user.display_name} <${user.email}> (${user.auth_provider})`;
+    // The anonymous Local Owner (plain local dev) has no session to end.
+    actions.hidden = user.auth_provider === 'local';
   } catch {
     document.getElementById('authUser').textContent = 'Not signed in';
+    actions.hidden = true;
   }
 }
 
@@ -1142,10 +1170,20 @@ async function devLogin(event) {
 async function logoutSession() {
   try {
     await fetchJson('/api/auth/logout', {method: 'POST'}, 'Unable to sign out.');
-    setStatus('authStatus', 'Signed out.');
-    await loadAuthUser();
+    // Reload: Google mode lands on /login, local dev falls back to Local Owner.
+    window.location.assign('/');
   } catch {
     setStatus('authStatus', 'Sign-out failed.', true);
+  }
+}
+
+async function logoutEverywhere() {
+  if (!window.confirm('Sign out of Life Inbox on every device?')) return;
+  try {
+    await fetchJson('/api/auth/logout-all', {method: 'POST'}, 'Unable to sign out everywhere.');
+    window.location.assign('/');
+  } catch (error) {
+    setStatus('authStatus', error.message || 'Sign-out failed.', true);
   }
 }
 

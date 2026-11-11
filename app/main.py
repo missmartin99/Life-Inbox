@@ -5,7 +5,14 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
+from starlette.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 
 from app.auto_analysis import AutoAnalyzer, auto_analysis_enabled
@@ -22,7 +29,11 @@ from app.capture.storage import (
 )
 from app.capture.url_fetch import fetch_url, validate_public_http_url
 from app.capture.voice_extract import process_voice_bytes, validate_audio_upload
+from app.config import load_config
 from app.database import (
+    AnalysisAlreadyRunningError,
+    AuthRequiredError,
+    task_is_owned,
     add_image_item_to_db,
     add_item_to_db,
     add_note_to_db,
@@ -110,6 +121,16 @@ from app.schemas import (
 APP_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
 
+# Default strictness: beta/production refuse to start when misconfigured
+# (SQLite, short session secret, dev login on, missing Google keys, http URL).
+_startup_config = load_config()
+_docs_kwargs = (
+    {}
+    if _startup_config.environment == "local"
+    else {"docs_url": None, "redoc_url": None, "openapi_url": None}
+)
+
+
 class RevalidatingStaticFiles(StaticFiles):
     """Static files the browser must re-check on every load.
 
@@ -124,7 +145,7 @@ class RevalidatingStaticFiles(StaticFiles):
         return response
 
 
-app = FastAPI(title="Life Inbox")
+app = FastAPI(title="Life Inbox", **_docs_kwargs)
 app.mount(
     "/static",
     RevalidatingStaticFiles(directory=APP_DIR / "static"),
@@ -197,21 +218,57 @@ def _trigger_auto_analysis() -> None:
     auto_analyzer.schedule(owner_id)
 
 
+PUBLIC_API_PATHS = {
+    "/api/health",
+    "/api/auth/google/start",
+    "/api/auth/google/callback",
+    "/api/auth/dev-login",
+    "/api/auth/logout",
+    "/api/auth/options",
+}
+STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
 @app.middleware("http")
 async def bind_owner_from_session(request, call_next):
-    from app.auth import SESSION_COOKIE, parse_session_token
-    from app.config import load_config
-    from app.database import (
-        get_or_create_default_owner_id,
-        set_current_owner_id,
-    )
+    """Identify the user from the session cookie and gate the API.
 
-    token = request.cookies.get(SESSION_COOKIE)
-    owner_id = parse_session_token(token) if token else None
-    if owner_id is None:
-        config = load_config(strict=False)
-        if config.environment == "local":
-            owner_id = get_or_create_default_owner_id()
+    The signed-in user's id is bound to this request only (a ContextVar), so
+    concurrent requests from different users can never see each other's id.
+    """
+    from app.auth import current_user_from_request, origin_allowed
+    from app.database import get_or_create_default_owner_id, set_current_owner_id
+
+    config = load_config(strict=False)
+    path = request.url.path
+    is_api = path.startswith("/api/")
+
+    if (
+        is_api
+        and request.method in STATE_CHANGING_METHODS
+        and not origin_allowed(request, config)
+    ):
+        return JSONResponse(
+            {"detail": "Cross-origin request blocked."}, status_code=403
+        )
+
+    owner_id = None
+    if is_api or path == "/":
+        # Database lookups run in a worker thread so they never block the
+        # event loop (and every other user's requests).
+        user = await run_in_threadpool(current_user_from_request, request)
+        if user is not None:
+            owner_id = user["id"]
+        elif config.local_anonymous_allowed:
+            owner_id = await run_in_threadpool(get_or_create_default_owner_id)
+
+    if is_api and path not in PUBLIC_API_PATHS and owner_id is None:
+        return JSONResponse(
+            {"detail": "Authentication required."}, status_code=401
+        )
+    if path == "/" and owner_id is None:
+        return RedirectResponse("/login", status_code=302)
+
     set_current_owner_id(owner_id)
     try:
         response = await call_next(request)
@@ -220,9 +277,14 @@ async def bind_owner_from_session(request, call_next):
     return response
 
 
+@app.exception_handler(AuthRequiredError)
+async def auth_required_handler(request, exc):
+    return JSONResponse({"detail": "Authentication required."}, status_code=401)
+
+
 @app.get("/api/health")
 def health():
-    from app.config import config_warnings, load_config
+    from app.config import config_warnings
 
     try:
         config = load_config(strict=False)
@@ -238,49 +300,167 @@ def health():
         return {"status": "degraded", "error": str(exc)}
 
 
-@app.get("/api/auth/me")
-def auth_me(request: Request):
-    from app.auth import SESSION_COOKIE, parse_session_token
-    from app.database import get_or_create_default_owner_id, get_user_by_id
+@app.get("/api/auth/options")
+def auth_options():
+    """Which sign-in controls the browser should show (public, no user data)."""
+    config = load_config(strict=False)
+    return {
+        "google_enabled": config.google_enabled,
+        "dev_login_enabled": bool(
+            config.allow_dev_login and config.environment == "local"
+        ),
+        "local_anonymous": config.local_anonymous_allowed,
+    }
 
-    token = request.cookies.get(SESSION_COOKIE)
-    user_id = parse_session_token(token) if token else None
-    if user_id is not None:
-        user = get_user_by_id(user_id)
-        if user is not None:
-            return user
-    # Local anonymous maps to default owner identity for display only.
-    return get_user_by_id(get_or_create_default_owner_id())
+
+@app.get("/api/auth/me")
+def auth_me():
+    from app.database import get_current_owner_id, get_user_by_id
+
+    owner_id = get_current_owner_id()
+    user = get_user_by_id(owner_id) if owner_id is not None else None
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return user
 
 
 @app.post("/api/auth/dev-login")
-def auth_dev_login(payload: dict, response: Response):
-    from app.auth import dev_login_user, set_session_cookie
+def auth_dev_login(payload: dict, request: Request, response: Response):
+    from app.auth import dev_login_user, start_session
 
     email = str(payload.get("email", "")).strip()
     display_name = payload.get("display_name")
     user = dev_login_user(email, display_name=display_name)
-    set_session_cookie(response, user["id"])
+    start_session(response, request, user["id"])
     return user
 
 
 @app.post("/api/auth/logout")
-def auth_logout(response: Response):
-    from app.auth import clear_session_cookie
+def auth_logout(request: Request, response: Response):
+    from app.auth import end_session
 
-    clear_session_cookie(response)
+    end_session(response, request)
     return {"status": "logged_out"}
 
 
+@app.post("/api/auth/logout-all")
+def auth_logout_all(request: Request, response: Response):
+    """Sign out of every device (all of this user's sessions)."""
+    from app.auth import clear_session_cookie
+    from app.database import require_owner_id, revoke_all_auth_sessions
+
+    revoked = revoke_all_auth_sessions(require_owner_id())
+    clear_session_cookie(response)
+    return {"status": "logged_out_everywhere", "sessions_revoked": revoked}
+
+
 @app.get("/api/auth/google/start")
-def auth_google_start():
-    """Stub only — real Google OAuth is not activated in this build."""
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Google sign-in stub only. Real OAuth consent is not enabled. "
-            "Use /api/auth/dev-login for private-beta local testing."
-        ),
+def auth_google_start(next: Optional[str] = None):
+    from app.google_oauth import OAUTH_COOKIE, OAUTH_COOKIE_TTL_SECONDS
+    from app.google_oauth import build_authorization
+
+    config = load_config(strict=False)
+    if not config.google_enabled:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Google OAuth is not configured. Set LIFE_INBOX_AUTH_MODE=google, "
+                "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET."
+            ),
+        )
+    url, cookie_value = build_authorization(config, next)
+    response = RedirectResponse(url, status_code=302)
+    response.set_cookie(
+        key=OAUTH_COOKIE,
+        value=cookie_value,
+        max_age=OAUTH_COOKIE_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",  # must be Lax: Google redirects back via a top-level GET
+        secure=config.cookie_secure,
+        path="/api/auth/google",
+    )
+    return response
+
+
+@app.get("/api/auth/google/callback")
+def auth_google_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    from app.auth import start_session
+    from app.database import upsert_google_user
+    from app.google_oauth import (
+        OAUTH_COOKIE,
+        GoogleAuthError,
+        email_allowed,
+        fetch_google_identity,
+        read_state_cookie,
+    )
+
+    config = load_config(strict=False)
+    if not config.google_enabled:
+        raise HTTPException(status_code=501, detail="Google OAuth is not configured.")
+
+    def fail(reason: str) -> RedirectResponse:
+        failed = RedirectResponse(f"/login?error={reason}", status_code=302)
+        failed.delete_cookie(OAUTH_COOKIE, path="/api/auth/google")
+        return failed
+
+    if error:
+        return fail("denied")
+    try:
+        saved = read_state_cookie(config, request.cookies.get(OAUTH_COOKIE), state)
+        if not code:
+            raise GoogleAuthError("failed")
+        identity = fetch_google_identity(config, code, saved["verifier"])
+        if not email_allowed(config, identity["email"]):
+            raise GoogleAuthError("not_allowed")
+        user = upsert_google_user(
+            sub=identity["sub"], email=identity["email"], name=identity["name"]
+        )
+    except GoogleAuthError as exc:
+        return fail(exc.code)
+    except ValueError:
+        return fail("failed")
+    except Exception:
+        logger.exception("Google sign-in failed")
+        return fail("failed")
+
+    response = RedirectResponse(saved["next"], status_code=302)
+    response.delete_cookie(OAUTH_COOKIE, path="/api/auth/google")
+    start_session(response, request, user["id"])
+    return response
+
+
+LOGIN_ERRORS = {
+    "denied": "Sign-in was cancelled.",
+    "state": "That sign-in link expired. Please try again.",
+    "email_unverified": "Your Google email address is not verified.",
+    "not_allowed": "This Google account is not on the invite list.",
+    "failed": "Google sign-in failed. Please try again.",
+}
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, error: Optional[str] = None):
+    import html
+
+    from app.auth import current_user_from_request
+
+    config = load_config(strict=False)
+    if config.local_anonymous_allowed or current_user_from_request(request):
+        return RedirectResponse("/", status_code=302)
+    message = LOGIN_ERRORS.get(error or "", "")
+    page = (APP_DIR / "templates" / "login.html").read_text(encoding="utf-8")
+    button = (
+        '<a class="btn" href="/api/auth/google/start">Sign in with Google</a>'
+        if config.google_enabled
+        else "<p>Google sign-in is not configured on this server.</p>"
+    )
+    return page.replace("__ERROR__", html.escape(message)).replace(
+        "__BUTTON__", button
     )
 
 
@@ -1050,7 +1230,7 @@ def calendar_preview(payload: CalendarPreviewRequest):
 @app.post("/api/calendar/confirm")
 def calendar_confirm(payload: CalendarConfirmRequest):
     draft = get_draft(payload.draft_id)
-    if draft is None:
+    if draft is None or not task_is_owned(draft.task_id):
         raise HTTPException(
             status_code=404,
             detail="Calendar draft not found. Create a preview first.",
@@ -1312,6 +1492,11 @@ def analyze_inbox(scope: str = Query("new", pattern="^(new|all)$")):
     """
     try:
         return _run_analysis(scope)
+    except AnalysisAlreadyRunningError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="An analysis is already running. Please wait for it to finish.",
+        ) from exc
     except Exception as exc:
         logger.exception("Failed to analyze inbox")
         raise HTTPException(

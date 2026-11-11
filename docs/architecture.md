@@ -21,12 +21,15 @@
 | `app/retrieval/` | Keyword + local TF-IDF search, grounded Ask My Inbox |
 | `app/attention/` | Timing parse, attention buckets, briefing helpers |
 | `app/integrations/` | Replaceable Calendar adapter (mock / preview-only Google) |
-| `app/auth.py` / `app/config.py` | Session auth + startup config validation |
+| `app/auth.py` / `app/config.py` | Server-side session auth + startup config validation |
+| `app/google_oauth.py` | Google sign-in (OpenID Connect code flow, `state` + PKCE, invite list) |
 | `app/storage_backend.py` | Upload storage abstraction (local FS default) |
 | `app/templates` / `app/static` | Browser UI |
 
 ## Data model (current)
 
+- `users` — accounts (Google `google_sub` link, built-in Local Owner)
+- `auth_sessions` — server-side login sessions (only token hashes stored)
 - `inbox_items` — canonical captures
 - `notes` — legacy safety copy (not authoritative)
 - `topics` — user-editable spaces/projects (seeded defaults)
