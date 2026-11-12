@@ -69,6 +69,15 @@ class InboxItem(BaseModel):
     owner_user_id: Optional[int] = None
     created_at: str
     updated_at: Optional[str]
+    is_sensitive: bool = False
+
+
+class SensitiveUpdate(BaseModel):
+    sensitive: bool
+
+
+class RedactPreviewRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
 
 
 class UrlItemCreate(BaseModel):

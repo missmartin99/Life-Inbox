@@ -138,6 +138,26 @@ task's latest text, priority, and timing in place instead of creating a
 duplicate when AI wording or priority changes. Its open, completed, or
 dismissed status is never changed by AI analysis.
 
+### Privacy layer
+
+Every text AI call goes through `ask_ai()` in `app/privacy.py`, which:
+
+1. replaces phone numbers, emails, card, Aadhaar and PAN numbers with
+   placeholders such as `[PHONE_1]` before anything leaves the app;
+2. puts the real values back into the AI reply locally;
+3. records the call (feature, model, characters sent, number of hidden
+   values, never the text) in the `ai_call_log` table.
+
+Items can be marked sensitive; their content is never sent to the AI.
+
+- `POST /api/items/{id}/sensitive` with `{"sensitive": true}` (or `false`);
+- `GET /api/privacy/ai-log` lists recent AI calls;
+- `POST /api/privacy/redact-preview` with `{"text": "..."}` shows what the AI
+  would see.
+
+Image descriptions and voice transcription send the media file itself, so
+they are not covered by text redaction.
+
 ## 4. Optional: configure OpenAI
 
 If you want AI analysis instead of the local fallback, set your API key in the
@@ -153,6 +173,14 @@ On Windows PowerShell:
 ```powershell
 $env:OPENAI_API_KEY="your-api-key"
 $env:OPENAI_MODEL="gpt-5-mini"
+```
+
+To use DeepSeek instead (it speaks the same API), put these in `.env`:
+
+```bash
+OPENAI_API_KEY=your-deepseek-key
+OPENAI_BASE_URL=https://api.deepseek.com
+OPENAI_MODEL=deepseek-chat
 ```
 
 Do not put the real key in source code or commit it to Git.

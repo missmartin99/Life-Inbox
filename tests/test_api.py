@@ -121,6 +121,7 @@ def test_create_and_list_canonical_text_item(client):
         "owner_user_id": item["owner_user_id"],
         "created_at": item["created_at"],
         "updated_at": None,
+        "is_sensitive": False,
     }
     assert item["owner_user_id"] is not None
     assert client.get("/api/items").json() == [item]
@@ -965,16 +966,20 @@ def test_valid_mocked_openai_output_is_validated(monkeypatch):
             "Low": [],
         },
     }
-    fake_responses = SimpleNamespace(
+    fake_completions = SimpleNamespace(
         create=lambda **_kwargs: SimpleNamespace(
-            output_text=json.dumps(model_output)
+            choices=[
+                SimpleNamespace(message=SimpleNamespace(content=json.dumps(model_output)))
+            ]
         )
     )
     monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
     monkeypatch.setattr(
         openai,
         "OpenAI",
-        lambda: SimpleNamespace(responses=fake_responses),
+        lambda: SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        ),
     )
 
     result = organizer.analyze_inbox_with_openai(
@@ -996,16 +1001,20 @@ def test_malformed_mocked_openai_output_uses_fallback(monkeypatch):
 
     from app import organizer
 
-    fake_responses = SimpleNamespace(
+    fake_completions = SimpleNamespace(
         create=lambda **_kwargs: SimpleNamespace(
-            output_text="not valid JSON"
+            choices=[
+                SimpleNamespace(message=SimpleNamespace(content="not valid JSON"))
+            ]
         )
     )
     monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
     monkeypatch.setattr(
         openai,
         "OpenAI",
-        lambda: SimpleNamespace(responses=fake_responses),
+        lambda: SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        ),
     )
 
     result = organizer.analyze_inbox_with_openai(

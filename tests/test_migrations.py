@@ -57,6 +57,7 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "owner_user_id",
             "created_at",
             "updated_at",
+            "is_sensitive",
         }
         assert columns["updated_at"]["nullable"] is True
         assert {
@@ -131,7 +132,7 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
                 text("SELECT version_num FROM alembic_version")
             )
             topic_count = connection.scalar(text("SELECT COUNT(*) FROM topics"))
-        assert revision == "0011_multi_user_ownership"
+        assert revision == "0012_privacy_layer"
         assert topic_count >= 9
     finally:
         engine.dispose()
@@ -232,7 +233,7 @@ def test_upgrade_adopts_legacy_database_without_changing_notes(
             for note_id, note_text, created_at in existing_notes
         ]
         assert next_id == 10
-        assert revision == "0011_multi_user_ownership"
+        assert revision == "0012_privacy_layer"
     finally:
         engine.dispose()
 
@@ -318,7 +319,7 @@ def test_upgrade_consolidates_tasks_that_share_a_source(tmp_path, monkeypatch):
             )
         ]
         assert [tuple(link) for link in links] == [(1, 1)]
-        assert revision == "0011_multi_user_ownership"
+        assert revision == "0012_privacy_layer"
 
         # Milestone 2 drops the one-task-per-source unique index so one
         # inbox item may source multiple durable tasks.

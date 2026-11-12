@@ -12,6 +12,7 @@ _current_owner_id: ContextVar[Optional[int]] = ContextVar(
 )
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
     ForeignKey,
@@ -117,6 +118,27 @@ class InboxItemRecord(Base):
     owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=True)
+    # Privacy: sensitive items are never sent to the AI model.
+    is_sensitive = Column(Boolean, nullable=False, default=False, server_default="0")
+
+
+class AiCallLogRecord(Base):
+    """One row per AI call: what feature, which model, how much was sent.
+
+    We deliberately do NOT store the prompt text itself.
+    """
+
+    __tablename__ = "ai_call_log"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(Text, nullable=False)
+    feature = Column(Text, nullable=False)
+    model = Column(Text, nullable=False)
+    status = Column(Text, nullable=False)
+    chars_sent = Column(Integer, nullable=False)
+    redactions = Column(Integer, nullable=False)
 
 
 class AnalysisRunRecord(Base):
@@ -410,6 +432,7 @@ def _item_to_dict(item: InboxItemRecord) -> dict:
         "owner_user_id": item.owner_user_id,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
+        "is_sensitive": bool(item.is_sensitive),
     }
 
 
@@ -624,6 +647,7 @@ def list_notes_from_db() -> list[dict]:
                 "id": item["id"],
                 "text": text,
                 "created_at": item["created_at"],
+                "is_sensitive": item["is_sensitive"],
             }
         )
     return notes
@@ -1849,3 +1873,70 @@ def get_organization_dashboard() -> dict:
             "analysis": latest,
             "pending_analysis_count": len(list_pending_notes_from_db()),
         }
+
+
+# ---------------------------------------------------------------------------
+# Privacy: sensitive items and the AI call log
+# ---------------------------------------------------------------------------
+
+
+def set_item_sensitive(item_id: int, sensitive: bool) -> Optional[dict]:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None or item.owner_user_id != owner_id:
+            return None
+        item.is_sensitive = sensitive
+        session.commit()
+        return _item_to_dict(item)
+
+
+def get_sensitive_item_ids() -> set:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(InboxItemRecord.id).where(
+                InboxItemRecord.owner_user_id == owner_id,
+                InboxItemRecord.is_sensitive.is_(True),
+            )
+        )
+        return {row[0] for row in rows}
+
+
+def add_ai_call_log(feature, model, status, chars_sent, redactions) -> None:
+    with SessionLocal() as session:
+        session.add(
+            AiCallLogRecord(
+                owner_user_id=get_current_owner_id(),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                feature=feature,
+                model=model,
+                status=status,
+                chars_sent=chars_sent,
+                redactions=redactions,
+            )
+        )
+        session.commit()
+
+
+def list_ai_call_log(limit: int = 50) -> list:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(AiCallLogRecord)
+            .where(AiCallLogRecord.owner_user_id == owner_id)
+            .order_by(AiCallLogRecord.id.desc())
+            .limit(limit)
+        )
+        return [
+            {
+                "id": row.id,
+                "created_at": row.created_at,
+                "feature": row.feature,
+                "model": row.model,
+                "status": row.status,
+                "chars_sent": row.chars_sent,
+                "redactions": row.redactions,
+            }
+            for row in rows
+        ]

@@ -19,7 +19,10 @@ from app.capture.storage import (
 )
 from app.capture.url_fetch import fetch_url, validate_public_http_url
 from app.capture.voice_extract import process_voice_bytes, validate_audio_upload
+from app.privacy import redact
 from app.database import (
+    list_ai_call_log,
+    set_item_sensitive,
     add_image_item_to_db,
     add_item_to_db,
     add_note_to_db,
@@ -73,6 +76,8 @@ from app.organizer import analyze_inbox_with_openai, validate_analysis_result
 from app.retrieval.ask import build_grounded_answer
 from app.retrieval.search import search_passages
 from app.schemas import (
+    RedactPreviewRequest,
+    SensitiveUpdate,
     AskRequest,
     AskResponse,
     CalendarConfirmRequest,
@@ -1042,6 +1047,31 @@ def patch_topic(topic_id: int, payload: TopicUpdate):
     if topic is None:
         raise HTTPException(status_code=404, detail="Topic not found.")
     return topic
+
+
+# --- Privacy --------------------------------------------------------------
+
+
+@app.post("/api/items/{item_id}/sensitive", response_model=InboxItem)
+def mark_item_sensitive(item_id: int, body: SensitiveUpdate):
+    """Mark an item sensitive (never sent to AI) or clear the flag."""
+    item = set_item_sensitive(item_id, body.sensitive)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return item
+
+
+@app.get("/api/privacy/ai-log")
+def get_ai_call_log(limit: int = Query(50, ge=1, le=200)):
+    """Which AI calls were made for this user (no prompt text is stored)."""
+    return list_ai_call_log(limit=limit)
+
+
+@app.post("/api/privacy/redact-preview")
+def redact_preview(body: RedactPreviewRequest):
+    """Show what the AI would see for a piece of text, for demos and trust."""
+    redacted, mapping = redact(body.text)
+    return {"redacted_text": redacted, "hidden_values": len(mapping)}
 
 
 @app.get("/api/items/{item_id}/insight", response_model=ItemInsight)
