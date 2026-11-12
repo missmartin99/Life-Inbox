@@ -120,6 +120,10 @@ class InboxItemRecord(Base):
     updated_at = Column(Text, nullable=True)
     # Privacy: sensitive items are never sent to the AI model.
     is_sensitive = Column(Boolean, nullable=False, default=False, server_default="0")
+    # Smart templates: "recipe", "book", "contact", "event", "other" (or None
+    # if not checked yet) and its fields stored as JSON text.
+    kind = Column(Text, nullable=True)
+    kind_fields = Column(Text, nullable=True)
 
 
 class AiCallLogRecord(Base):
@@ -433,6 +437,8 @@ def _item_to_dict(item: InboxItemRecord) -> dict:
         "created_at": item.created_at,
         "updated_at": item.updated_at,
         "is_sensitive": bool(item.is_sensitive),
+        "kind": item.kind,
+        "kind_fields": json.loads(item.kind_fields) if item.kind_fields else None,
     }
 
 
@@ -1940,3 +1946,34 @@ def list_ai_call_log(limit: int = 50) -> list:
             }
             for row in rows
         ]
+
+
+# ---------------------------------------------------------------------------
+# Smart templates: item kind + structured fields
+# ---------------------------------------------------------------------------
+
+
+def save_item_card(item_id: int, kind: str, fields: dict) -> Optional[dict]:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None or item.owner_user_id != owner_id:
+            return None
+        item.kind = kind
+        item.kind_fields = json.dumps(fields, ensure_ascii=False)
+        session.commit()
+        return _item_to_dict(item)
+
+
+def list_items_by_kind(kind: Optional[str] = None) -> list:
+    """Items that already have a card, newest first (optionally one kind)."""
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        query = select(InboxItemRecord).where(
+            InboxItemRecord.owner_user_id == owner_id,
+            InboxItemRecord.kind.is_not(None),
+        )
+        if kind:
+            query = query.where(InboxItemRecord.kind == kind)
+        query = query.order_by(InboxItemRecord.id.desc())
+        return [_item_to_dict(item) for item in session.scalars(query)]

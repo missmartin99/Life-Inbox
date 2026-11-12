@@ -70,6 +70,8 @@ class InboxItem(BaseModel):
     created_at: str
     updated_at: Optional[str]
     is_sensitive: bool = False
+    kind: Optional[str] = None
+    kind_fields: Optional[dict] = None
 
 
 class SensitiveUpdate(BaseModel):

@@ -158,6 +158,19 @@ Items can be marked sensitive; their content is never sent to the AI.
 Image descriptions and voice transcription send the media file itself, so
 they are not covered by text redaction.
 
+### Smart templates
+
+An item can be turned into a typed "card": `recipe`, `book`, `contact`,
+`event`, or `other`, with structured fields (for example ingredients and
+steps for a recipe). The logic lives in `app/item_kinds.py`; to add a new kind,
+add one entry to `KIND_FIELDS`.
+
+- `POST /api/items/{id}/card` works out the kind and fields and saves them
+  (the AI is used when configured; sensitive items and failures use a simple
+  keyword-based fallback);
+- `GET /api/cards?kind=recipe` lists items that have a card;
+- `GET /api/cards/kinds` lists every kind and its fields.
+
 ## 4. Optional: configure OpenAI
 
 If you want AI analysis instead of the local fallback, set your API key in the

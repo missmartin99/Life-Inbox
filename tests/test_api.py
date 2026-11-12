@@ -122,6 +122,8 @@ def test_create_and_list_canonical_text_item(client):
         "created_at": item["created_at"],
         "updated_at": None,
         "is_sensitive": False,
+        "kind": None,
+        "kind_fields": None,
     }
     assert item["owner_user_id"] is not None
     assert client.get("/api/items").json() == [item]

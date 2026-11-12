@@ -20,7 +20,10 @@ from app.capture.storage import (
 from app.capture.url_fetch import fetch_url, validate_public_http_url
 from app.capture.voice_extract import process_voice_bytes, validate_audio_upload
 from app.privacy import redact
+from app.item_kinds import KIND_FIELDS, make_card
 from app.database import (
+    list_items_by_kind,
+    save_item_card,
     list_ai_call_log,
     set_item_sensitive,
     add_image_item_to_db,
@@ -1047,6 +1050,37 @@ def patch_topic(topic_id: int, payload: TopicUpdate):
     if topic is None:
         raise HTTPException(status_code=404, detail="Topic not found.")
     return topic
+
+
+# --- Smart templates --------------------------------------------------------
+
+
+@app.post("/api/items/{item_id}/card", response_model=InboxItem)
+def create_item_card(item_id: int):
+    """Work out what kind of item this is (recipe, book, ...) and its fields."""
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    text = item["extracted_text"] or item["raw_text"] or item["title"] or ""
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Item has no text yet")
+
+    card = make_card(text, is_sensitive=item["is_sensitive"])
+    return save_item_card(item_id, card["kind"], card["fields"])
+
+
+@app.get("/api/cards", response_model=List[InboxItem])
+def list_cards(kind: Optional[str] = Query(None)):
+    """Items that have a smart card, optionally only one kind."""
+    if kind is not None and kind not in KIND_FIELDS:
+        raise HTTPException(status_code=400, detail="Unknown kind")
+    return list_items_by_kind(kind)
+
+
+@app.get("/api/cards/kinds")
+def list_card_kinds():
+    """The kinds we recognise and the fields each one has."""
+    return KIND_FIELDS
 
 
 # --- Privacy --------------------------------------------------------------
