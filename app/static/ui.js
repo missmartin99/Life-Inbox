@@ -592,11 +592,11 @@
       const message = status.textContent.trim();
       if (!armed || !panelName || panelName === activeTab || !message) return;
       const isError = status.classList.contains('error');
-      if (status.id === 'analysisStatus' || isError) showToast(panelName, message, isError);
+      if (isError) showToast(panelName, message, isError);
     }).observe(status, {childList: true, characterData: true, subtree: true});
   });
 
-  ['aiOutput', 'dashboard', 'topics', 'tasks', 'notes'].forEach(id => {
+  ['dashboard', 'topics', 'notes'].forEach(id => {
     const element = document.getElementById(id);
     if (!element) return;
     new MutationObserver(() => {

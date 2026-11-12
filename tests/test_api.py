@@ -1,5 +1,6 @@
 import importlib
 import json
+import re
 import sys
 from types import SimpleNamespace
 
@@ -57,19 +58,33 @@ def client(tmp_path, monkeypatch):
         sys.modules.pop(module_name, None)
 
 
+def test_static_files_are_revalidated_so_browsers_never_run_stale_scripts(client):
+    first = client.get("/static/app.js")
+    assert first.status_code == 200
+    assert first.headers["cache-control"] == "no-cache"
+
+    # Unchanged files are still cheap: the ETag yields a 304 on revalidation.
+    again = client.get(
+        "/static/app.js", headers={"if-none-match": first.headers["etag"]}
+    )
+    assert again.status_code == 304
+
+
 def test_home_page_loads(client):
     response = client.get("/")
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "<title>Life Inbox</title>" in response.text
-    # Landing page keeps its original "analyze everything" button...
-    assert "Analyze Entire Inbox with AI" in response.text
-    # ...and the AI Inbox page offers both options.
-    assert 'id="analyzeNewButton"' in response.text
-    assert "Analyze new notes" in response.text
-    assert 'id="analyzeAllButton"' in response.text
-    assert "Analyze the entire notes with AI" in response.text
+    # Notes are analyzed automatically, so there is no analyze button and
+    # no separate AI Inbox page.
+    assert "Analyze Entire Inbox" not in response.text
+    assert 'id="analyzeButton"' not in response.text
+    assert "AI Inbox" not in response.text
+    assert 'id="panel-ai"' not in response.text
+    assert 'data-tab="ai"' not in response.text
+    for tab in ("capture", "ask", "dashboard", "notes"):
+        assert f'data-tab="{tab}"' in response.text
 
 
 @pytest.mark.parametrize(
@@ -2228,13 +2243,620 @@ def test_pending_analysis_endpoint_lists_unanalyzed_ids(client):
     assert client.get("/api/analyze/pending").json() == {
         "pending_count": 0,
         "pending_item_ids": [],
+        "analyzing": False,
     }
     first_id = _add_note(client, "Call the team tomorrow")
     second_id = _add_note(client, "Buy groceries this weekend")
     assert client.get("/api/analyze/pending").json() == {
         "pending_count": 2,
         "pending_item_ids": [first_id, second_id],
+        "analyzing": False,
     }
 
     client.post("/api/analyze")
     assert client.get("/api/analyze/pending").json()["pending_count"] == 0
+
+
+# --- Automatic analysis: every saved note is analyzed without a click --------
+
+
+@pytest.fixture()
+def auto_client(client, monkeypatch):
+    """A client with automatic analysis switched on."""
+    monkeypatch.setenv("LIFE_INBOX_AUTO_ANALYZE", "1")
+    return client
+
+
+def _settle(client):
+    """Wait for background analysis to finish."""
+    sys.modules["app.main"].auto_analyzer.wait_for_idle()
+
+
+def _pending_ids(client):
+    return client.get("/api/analyze/pending").json()["pending_item_ids"]
+
+
+def test_saved_note_is_analyzed_automatically(auto_client, monkeypatch):
+    client = auto_client
+    calls = _record_analyzer_calls(monkeypatch)
+
+    note_id = _add_note(client, "Call the team tomorrow")
+    _settle(client)
+
+    assert calls == [[note_id]]
+    assert _pending_ids(client) == []
+    latest = client.get("/api/analyze/latest").json()
+    assert latest["analyzed_item_ids"] == [note_id]
+    assert _view_ids(latest) == [note_id]
+    assert latest["is_stale"] is False
+    # The ToDo from the note became a task without any manual step.
+    assert len(client.get("/api/tasks").json()) == 1
+    insight = client.get(f"/api/items/{note_id}/insight").json()
+    assert insight["item_id"] == note_id
+
+
+def test_every_note_in_a_burst_is_analyzed_exactly_once(auto_client, monkeypatch):
+    client = auto_client
+    calls = _record_analyzer_calls(monkeypatch)
+
+    ids = [
+        _add_note(client, "Call the team tomorrow"),
+        _add_note(client, "Buy groceries this weekend"),
+        _add_note(client, "Read an article about vector databases"),
+        _add_note(client, "Renew the car insurance before Friday"),
+    ]
+    _settle(client)
+
+    analyzed = sorted(item_id for call in calls for item_id in call)
+    assert analyzed == sorted(ids)  # none missed, none analyzed twice
+    assert _pending_ids(client) == []
+    assert _view_ids(client.get("/api/analyze/latest").json()) == sorted(ids)
+
+
+def test_editing_a_note_triggers_automatic_reanalysis(auto_client, monkeypatch):
+    client = auto_client
+    calls = _record_analyzer_calls(monkeypatch)
+    note_id = _add_note(client, "Call the team tomorrow")
+    _settle(client)
+
+    response = client.put(
+        f"/api/items/{note_id}", json={"raw_text": "Book the dentist next week"}
+    )
+    assert response.status_code == 200
+    _settle(client)
+
+    assert calls == [[note_id], [note_id]]
+    assert _pending_ids(client) == []
+
+
+def test_legacy_notes_endpoint_also_triggers_automatic_analysis(
+    auto_client, monkeypatch
+):
+    client = auto_client
+    calls = _record_analyzer_calls(monkeypatch)
+
+    note_id = client.post("/api/notes", json={"text": "Buy groceries today"}).json()["id"]
+    _settle(client)
+
+    assert calls == [[note_id]]
+    assert _pending_ids(client) == []
+
+
+def test_pdf_capture_is_analyzed_automatically(auto_client, monkeypatch):
+    from tests.pdf_fixtures import make_text_pdf
+
+    client = auto_client
+    calls = _record_analyzer_calls(monkeypatch)
+
+    response = client.post(
+        "/api/items/pdf",
+        files={"file": ("notes.pdf", make_text_pdf(), "application/pdf")},
+    )
+    assert response.status_code == 200
+    _settle(client)
+
+    assert calls == [[response.json()["id"]]]
+    assert _pending_ids(client) == []
+
+
+def test_failed_background_analysis_leaves_note_pending_then_recovers(
+    auto_client, monkeypatch
+):
+    client = auto_client
+    main = sys.modules["app.main"]
+    original = main.analyze_inbox_with_openai
+
+    def broken(_notes):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(main, "analyze_inbox_with_openai", broken)
+    first_id = _add_note(client, "Call the team tomorrow")
+    _settle(client)
+    # The note is saved and still waiting; nothing was lost.
+    assert _pending_ids(client) == [first_id]
+    assert client.get("/api/analyze/latest").status_code == 204
+
+    # Next save retries everything that is still pending.
+    monkeypatch.setattr(main, "analyze_inbox_with_openai", original)
+    second_id = _add_note(client, "Buy groceries this weekend")
+    _settle(client)
+
+    assert _pending_ids(client) == []
+    assert _view_ids(client.get("/api/analyze/latest").json()) == [first_id, second_id]
+
+
+def test_manual_analyze_rescues_notes_a_background_run_missed(
+    auto_client, monkeypatch
+):
+    client = auto_client
+    main = sys.modules["app.main"]
+    original = main.analyze_inbox_with_openai
+    monkeypatch.setattr(
+        main,
+        "analyze_inbox_with_openai",
+        lambda _notes: (_ for _ in ()).throw(RuntimeError("provider down")),
+    )
+    note_id = _add_note(client, "Call the team tomorrow")
+    _settle(client)
+    assert _pending_ids(client) == [note_id]
+
+    monkeypatch.setattr(main, "analyze_inbox_with_openai", original)
+    rescue = client.post("/api/analyze")
+
+    assert rescue.status_code == 200
+    assert rescue.json()["analyzed_item_ids"] == [note_id]
+    assert _pending_ids(client) == []
+
+
+def test_automatic_analysis_does_nothing_when_nothing_is_pending(
+    auto_client, monkeypatch
+):
+    client = auto_client
+    calls = _record_analyzer_calls(monkeypatch)
+    note_id = _add_note(client, "Call the team tomorrow")
+    _settle(client)
+    runs_before = client.get("/api/analyze/latest").json()["analysis_run_id"]
+
+    # Saving a note that is not analyzable yet must not create empty runs.
+    main = sys.modules["app.main"]
+    main.auto_analyzer.schedule(1)
+    _settle(client)
+
+    assert calls == [[note_id]]
+    assert client.get("/api/analyze/latest").json()["analysis_run_id"] == runs_before
+
+
+def test_automatic_analysis_can_be_switched_off(client, monkeypatch):
+    monkeypatch.setenv("LIFE_INBOX_AUTO_ANALYZE", "0")
+    calls = _record_analyzer_calls(monkeypatch)
+
+    note_id = _add_note(client, "Call the team tomorrow")
+    _settle(client)
+
+    assert calls == []
+    assert _pending_ids(client) == [note_id]
+
+
+def test_pending_endpoint_reports_analyzing_flag(auto_client):
+    client = auto_client
+    assert client.get("/api/analyze/pending").json()["analyzing"] is False
+    _add_note(client, "Call the team tomorrow")
+    _settle(client)
+    assert client.get("/api/analyze/pending").json()["analyzing"] is False
+
+
+def test_page_scripts_are_versioned_so_stale_copies_are_never_reused(client):
+    html = client.get("/").text
+    for asset in ("styles.css", "pagination_state.js", "app.js", "ui.js", "playful.js"):
+        assert re.search(rf"/static/{re.escape(asset)}\?v=\d+", html), asset
+    # The versioned URL still serves the file.
+    assert client.get("/static/app.js?v=123").status_code == 200
+
+
+def test_attention_board_places_tasks_in_overdue_today_and_upcoming(
+    client, monkeypatch
+):
+    from datetime import timedelta
+
+    from app.attention.dates import today_in_configured_tz
+
+    today = today_in_configured_tz()
+    first_id = _add_note(client, "Pay the rent")
+    second_id = _add_note(client, "Submit the report")
+    third_id = _add_note(client, "Book the tickets")
+    fourth_id = _add_note(client, "Plan the trip")
+    main = sys.modules["app.main"]
+
+    def analyze(notes):
+        timings = {
+            first_id: (today - timedelta(days=3)).strftime("%d/%m/%Y"),
+            second_id: "today",
+            third_id: (today + timedelta(days=4)).strftime("%d/%m/%y"),
+            fourth_id: "no real timing here",
+        }
+        return {
+            "buckets": [
+                {
+                    "name": "Work",
+                    "notes": [
+                        {"id": note["id"], "title": note["text"], "priority": "Medium"}
+                        for note in notes
+                    ],
+                }
+            ],
+            "todos": [
+                {
+                    "task": note["text"],
+                    "priority": "Medium",
+                    "source_note_ids": [note["id"]],
+                    "when": timings[note["id"]],
+                }
+                for note in notes
+            ],
+            "priority_view": {
+                "High": [],
+                "Medium": [
+                    {"id": note["id"], "title": note["text"]} for note in notes
+                ],
+                "Low": [],
+            },
+            "mode": "openai",
+        }
+
+    monkeypatch.setattr(main, "analyze_inbox_with_openai", analyze)
+    client.post("/api/analyze")
+
+    board = client.get("/api/attention").json()
+    names = {
+        bucket: sorted(task["text"] for task in board[bucket])
+        for bucket in ("overdue", "today", "upcoming", "unscheduled")
+    }
+    assert names == {
+        "overdue": ["Pay the rent"],
+        "today": ["Submit the report"],
+        "upcoming": ["Book the tickets"],
+        "unscheduled": ["Plan the trip"],
+    }
+    briefing = client.get("/api/briefing").json()
+    assert briefing["counts"]["overdue"] == 1
+    assert briefing["counts"]["today"] == 1
+    assert briefing["counts"]["upcoming"] == 1
+
+
+@pytest.mark.parametrize(
+    "phrase, expected, confidence, needs_confirmation",
+    [
+        ("20th of this month", "2026-11-20", "high", False),
+        ("due 20th of this month", "2026-11-20", "high", False),
+        ("the 30th", "2026-11-30", "medium", True),
+        ("the 5th", "2026-12-05", "medium", True),
+        ("5th of next month", "2026-12-05", "high", False),
+        ("12:10 pm on 21/11/26", "2026-11-21", "high", False),
+        ("21/11/2026", "2026-11-21", "high", False),
+        ("11/21/26", "2026-11-21", "high", False),
+        ("03/04/2026", "2026-04-03", "medium", True),
+        ("21 November", "2026-11-21", "medium", True),
+        ("20th of November 2026", "2026-11-20", "high", False),
+        ("tonight", "2026-11-12", "high", False),
+        ("tom", "2026-11-13", "high", False),
+        ("tmrw morning", "2026-11-13", "high", False),
+        ("day after tomorrow", "2026-11-14", "high", False),
+        ("yesterday", "2026-11-11", "high", False),
+        ("end of the month", "2026-11-30", "medium", True),
+        ("next week", "2026-11-16", "medium", True),
+        ("this week", "2026-11-13", "medium", True),
+    ],
+)
+def test_parse_timing_understands_common_phrases(
+    phrase, expected, confidence, needs_confirmation
+):
+    from datetime import date
+
+    from app.attention.dates import parse_timing_phrase
+
+    parsed = parse_timing_phrase(phrase, reference=date(2026, 11, 12))
+
+    assert parsed.normalized_iso == expected
+    assert parsed.confidence == confidence
+    assert parsed.needs_confirmation is needs_confirmation
+
+
+@pytest.mark.parametrize("phrase", ["31st of this month", "soon", "whenever"])
+def test_parse_timing_leaves_unreadable_phrases_unscheduled(phrase):
+    from datetime import date
+
+    from app.attention.dates import parse_timing_phrase
+
+    parsed = parse_timing_phrase(phrase, reference=date(2026, 11, 12))
+
+    assert parsed.normalized_iso is None
+    assert parsed.needs_confirmation is True
+
+
+# --- Time-aware overdue --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "phrase, expected",
+    [
+        ("12:15 pm today", (12, 15)),
+        ("12:26 today", (12, 26)),
+        ("5pm tomorrow", (17, 0)),
+        ("at 5 pm", (17, 0)),
+        ("17:30", (17, 30)),
+        ("noon", (12, 0)),
+        ("12:10 pm on 21/11/26", (12, 10)),
+        ("12:05 am", (0, 5)),
+        ("5:30 today", None),  # no am/pm: ambiguous, so no time is assumed
+        ("today", None),
+        ("", None),
+    ],
+)
+def test_parse_time_of_day(phrase, expected):
+    from datetime import time
+
+    from app.attention.dates import parse_time_of_day
+
+    parsed = parse_time_of_day(phrase)
+
+    assert parsed == (time(*expected) if expected else None)
+
+
+def test_task_due_today_becomes_overdue_once_its_time_passes():
+    from datetime import date, datetime, time
+    from zoneinfo import ZoneInfo
+
+    from app.attention.dates import classify_attention_bucket as classify
+
+    today = date(2026, 11, 12)
+    zone = ZoneInfo("Asia/Kolkata")
+    before = datetime(2026, 11, 12, 12, 10, tzinfo=zone)
+    after = datetime(2026, 11, 12, 12, 20, tzinfo=zone)
+
+    assert classify(today, reference=today, due_time=time(12, 15), now=before) == "today"
+    assert classify(today, reference=today, due_time=time(12, 15), now=after) == "overdue"
+    # Without a clock time the task stays "today" until the day ends.
+    assert classify(today, reference=today, now=after) == "today"
+    # A later date is never overdue because of the time of day.
+    assert (
+        classify(date(2026, 11, 13), reference=today, due_time=time(9, 0), now=after)
+        == "upcoming"
+    )
+
+
+def _freeze_clock(monkeypatch, hour, minute):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    frozen = datetime(2026, 11, 12, hour, minute, tzinfo=ZoneInfo("Asia/Kolkata"))
+    monkeypatch.setattr("app.attention.dates.now_in_configured_tz", lambda: frozen)
+
+
+def _seed_tasks(client, monkeypatch, timings):
+    """Save one note per entry and give each a ToDo with the given timing."""
+    for text in timings:
+        _add_note(client, text)
+    main = sys.modules["app.main"]
+
+    def analyze(notes):
+        return {
+            "buckets": [
+                {
+                    "name": "Work",
+                    "notes": [
+                        {"id": n["id"], "title": n["text"], "priority": "High"}
+                        for n in notes
+                    ],
+                }
+            ],
+            "todos": [
+                {
+                    "task": n["text"],
+                    "priority": "High",
+                    "source_note_ids": [n["id"]],
+                    "when": timings[n["text"]],
+                }
+                for n in notes
+            ],
+            "priority_view": {
+                "High": [{"id": n["id"], "title": n["text"]} for n in notes],
+                "Medium": [],
+                "Low": [],
+            },
+            "mode": "openai",
+        }
+
+    monkeypatch.setattr(main, "analyze_inbox_with_openai", analyze)
+    assert client.post("/api/analyze").status_code == 200
+
+
+def test_attention_board_moves_timed_task_to_overdue_when_its_time_passes(
+    client, monkeypatch
+):
+    _freeze_clock(monkeypatch, 12, 20)
+    _seed_tasks(
+        client,
+        monkeypatch,
+        {
+            "Submit doc": "12:15 pm today",
+            "Buy water": "11:00 pm today",
+            "Water plants": "today",
+        },
+    )
+
+    board = client.get("/api/attention").json()
+
+    assert [t["text"] for t in board["overdue"]] == ["Submit doc"]
+    assert board["overdue"][0]["due_time"] == "12:15"
+    assert sorted(t["text"] for t in board["today"]) == ["Buy water", "Water plants"]
+    briefing = client.get("/api/briefing").json()
+    assert briefing["counts"]["overdue"] == 1
+    assert briefing["counts"]["today"] == 2
+    reasons = {s["text"]: s["reason"] for s in briefing["priority_suggestions"]}
+    assert "overdue since 12:15" in reasons["Submit doc"]
+
+
+def test_timed_task_is_not_overdue_before_its_time(client, monkeypatch):
+    _freeze_clock(monkeypatch, 12, 10)
+    _seed_tasks(client, monkeypatch, {"Submit doc": "12:15 pm today"})
+
+    board = client.get("/api/attention").json()
+
+    assert board["overdue"] == []
+    assert [t["text"] for t in board["today"]] == ["Submit doc"]
+
+
+# --- Ask lists every matching task ----------------------------------------------
+
+
+def _seed_mixed_tasks(client, monkeypatch):
+    _freeze_clock(monkeypatch, 12, 20)
+    _seed_tasks(
+        client,
+        monkeypatch,
+        {
+            "Pay rent": "yesterday",
+            "Submit doc": "12:15 pm today",
+            "Buy water": "12:26 today",
+            "Call dentist": "tomorrow",
+            "Plan trip": "21/11/26",
+            "Read book": "no real timing here",
+        },
+    )
+
+
+def _ask(client, question):
+    response = client.post("/api/ask", json={"question": question})
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_ask_what_to_do_today_lists_every_task_due_today_or_overdue(
+    client, monkeypatch
+):
+    _seed_mixed_tasks(client, monkeypatch)
+
+    data = _ask(client, "what all do i have to do today")
+
+    assert data["mode"] == "task_board"
+    assert data["confidence"] == "high"
+    assert data["answer"].startswith("You have 3 tasks for today (2 overdue):")
+    lines = data["answer"].splitlines()
+    # Oldest first, then by time of day.
+    assert "Pay rent" in lines[1] and "overdue by 1 day" in lines[1]
+    assert "Submit doc" in lines[2] and "12:15 PM" in lines[2]
+    assert "overdue, its time has passed" in lines[2]
+    assert "Buy water" in lines[3] and "12:26 PM" in lines[3]
+    assert "Call dentist" not in data["answer"]
+    assert "Plan trip" not in data["answer"]
+    assert "1 task has no date yet." in data["answer"]
+    assert [c["title"] for c in data["citations"]] == [
+        "Pay rent",
+        "Submit doc",
+        "Buy water",
+    ]
+    assert all(c["source_kind"] == "task" for c in data["citations"])
+
+
+def test_ask_scopes_overdue_tomorrow_and_upcoming(client, monkeypatch):
+    _seed_mixed_tasks(client, monkeypatch)
+
+    overdue = _ask(client, "what is overdue")["answer"]
+    assert "Pay rent" in overdue and "Submit doc" in overdue
+    assert "Buy water" not in overdue
+
+    tomorrow = _ask(client, "what do i have to do tomorrow")["answer"]
+    assert tomorrow.startswith("You have 1 task for tomorrow:")
+    assert "Call dentist" in tomorrow and "Plan trip" not in tomorrow
+
+    upcoming = _ask(client, "what is coming up")["answer"]
+    assert "Call dentist" in upcoming and "Plan trip" in upcoming
+    assert "Pay rent" not in upcoming
+
+
+def test_ask_all_tasks_includes_undated_ones(client, monkeypatch):
+    _seed_mixed_tasks(client, monkeypatch)
+
+    data = _ask(client, "list my tasks")
+
+    assert data["answer"].startswith(
+        "You have 6 tasks that are still open (2 overdue):"
+    )
+    assert "Read book — no date" in data["answer"]
+    assert len(data["citations"]) == 6
+
+
+def test_ask_filters_tasks_by_topic_and_falls_back_to_notes(client, monkeypatch):
+    _seed_mixed_tasks(client, monkeypatch)
+
+    dentist = _ask(client, "what tasks do i have about the dentist")
+    assert dentist["mode"] == "task_board"
+    assert [c["title"] for c in dentist["citations"]] == ["Call dentist"]
+
+    # No task matches: do not pretend; search the notes instead.
+    other = _ask(client, "what tasks do i have about gardening")
+    assert other["mode"] != "task_board"
+
+
+def test_ask_reports_when_no_tasks_match(client, monkeypatch):
+    _freeze_clock(monkeypatch, 12, 20)
+    _seed_tasks(client, monkeypatch, {"Read book": "no real timing here"})
+
+    data = _ask(client, "what do i have to do tomorrow")
+
+    assert data["answer"] == (
+        "You have no open tasks for tomorrow. 1 task has no date yet."
+    )
+    assert data["citations"] == []
+    assert _ask(client, "what do i have to do today")["answer"].startswith(
+        "You have no open tasks for today."
+    )
+
+
+def test_ask_about_other_things_still_searches_notes(client, monkeypatch):
+    _seed_mixed_tasks(client, monkeypatch)
+    _add_note(client, "Favourite restaurant is Saravana Bhavan in Chennai")
+
+    data = _ask(client, "which restaurant did i save")
+
+    assert data["mode"] != "task_board"
+
+
+# --- No Tasks page, no date confirmation ----------------------------------------
+
+
+def test_page_has_no_tasks_tab_or_panel(client):
+    html = client.get("/").text
+
+    assert 'data-tab="tasks"' not in html
+    assert 'id="panel-tasks"' not in html
+    assert 'id="taskStatusFilter"' not in html
+    for tab in ("capture", "ask", "dashboard", "notes"):
+        assert f'data-tab="{tab}"' in html
+
+
+def test_ambiguous_dates_are_used_without_asking_for_confirmation(
+    client, monkeypatch
+):
+    _freeze_clock(monkeypatch, 12, 20)
+    _seed_tasks(
+        client,
+        monkeypatch,
+        {"Plan trip": "the 30th", "Pay rent": "this weekend", "Call mum": "asap"},
+    )
+
+    board = client.get("/api/attention").json()
+    entries = [t for key in ("overdue", "today", "upcoming", "unscheduled") for t in board[key]]
+
+    assert len(entries) == 3
+    assert board["needs_confirmation"] == []
+    assert not any(t["needs_confirmation"] for t in entries)
+    assert client.get("/api/briefing").json()["counts"]["needs_confirmation"] == 0
+
+    answer = _ask(client, "list my tasks")["answer"]
+    assert "needs confirmation" not in answer
+
+    # A calendar preview no longer demands a separate "confirm the date" step.
+    task = next(t for t in entries if t["text"] == "Pay rent")
+    preview = client.post("/api/calendar/preview", json={"task_id": task["id"]})
+    assert preview.status_code == 200

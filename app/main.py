@@ -1,4 +1,6 @@
 import logging
+import re
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -6,6 +8,7 @@ from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile, st
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from app.auto_analysis import AutoAnalyzer, auto_analysis_enabled
 from app.capture.image_extract import process_image_bytes, validate_image_upload
 from app.capture.pdf_extract import extract_pdf_text, validate_pdf_upload
 from app.capture.storage import (
@@ -39,6 +42,7 @@ from app.database import (
     fail_analysis_run,
     fail_item_processing,
     get_attention_board,
+    get_current_owner_id,
     get_daily_briefing,
     get_item_from_db,
     get_item_insight,
@@ -53,6 +57,7 @@ from app.database import (
     list_topics_from_db,
     mark_item_processing,
     save_calendar_receipt,
+    set_current_owner_id,
     set_task_reminder_in_db,
     set_task_status,
     snooze_task_in_db,
@@ -105,10 +110,91 @@ from app.schemas import (
 APP_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
 
+class RevalidatingStaticFiles(StaticFiles):
+    """Static files the browser must re-check on every load.
+
+    Without this, a browser can keep running an old app.js against a newer
+    page and break in confusing ways. The ETag still makes unchanged files a
+    cheap 304 response.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 app = FastAPI(title="Life Inbox")
-app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
+app.mount(
+    "/static",
+    RevalidatingStaticFiles(directory=APP_DIR / "static"),
+    name="static",
+)
 
 init_db()
+
+# One analysis at a time: a manual run and an automatic one never overlap, so
+# the same notes are never analyzed twice.
+_analysis_lock = threading.Lock()
+
+
+def _run_analysis(scope: str = "new", *, only_if_pending: bool = False):
+    """Analyze notes and persist the result.
+
+    scope "new" analyzes notes that are new or edited since their last
+    analysis; "all" re-analyzes the whole inbox. With ``only_if_pending`` a
+    "new" run does nothing (returns None) when there is nothing to analyze.
+    """
+    with _analysis_lock:
+        run_id = None
+        try:
+            previous = None
+            if scope == "new":
+                previous = get_latest_successful_analysis()
+                notes = list_pending_notes_from_db()
+                if only_if_pending and not notes:
+                    return None
+                if (
+                    previous is not None
+                    and not notes
+                    and not previous["is_stale"]
+                ):
+                    return {**previous, "analyzed_item_ids": []}
+            else:
+                notes = list_notes_from_db()
+
+            run_id = start_analysis_run()
+            raw_result = analyze_inbox_with_openai(notes)
+            result = validate_analysis_result(raw_result, notes)
+            return complete_analysis_run(run_id, result, previous=previous)
+        except Exception:
+            if run_id is not None:
+                try:
+                    fail_analysis_run(run_id)
+                except Exception:
+                    logger.exception("Failed to mark analysis run as failed")
+            raise
+
+
+def _auto_analyze_owner(owner_id: int) -> None:
+    set_current_owner_id(owner_id)
+    try:
+        _run_analysis("new", only_if_pending=True)
+    finally:
+        set_current_owner_id(None)
+
+
+auto_analyzer = AutoAnalyzer(_auto_analyze_owner)
+
+
+def _trigger_auto_analysis() -> None:
+    """Analyze any new note in the background as soon as it is saved."""
+    if not auto_analysis_enabled():
+        return
+    owner_id = get_current_owner_id()
+    if owner_id is None:
+        return
+    auto_analyzer.schedule(owner_id)
 
 
 @app.middleware("http")
@@ -388,13 +474,15 @@ def _process_voice_item(item_id: int) -> dict:
 @app.post("/api/items", response_model=InboxItem)
 def create_item(payload: InboxItemCreate):
     try:
-        return add_item_to_db(payload.raw_text)
+        item = add_item_to_db(payload.raw_text)
     except Exception as exc:
         logger.exception("Failed to save inbox item")
         raise HTTPException(
             status_code=500,
             detail="Unable to save item. Please try again.",
         ) from exc
+    _trigger_auto_analysis()
+    return item
 
 
 @app.post("/api/items/url", response_model=InboxItem)
@@ -413,7 +501,9 @@ def create_url_item(payload: UrlItemCreate):
             detail="Unable to save URL. Please try again.",
         ) from exc
 
-    return _process_url_item(item["id"])
+    processed = _process_url_item(item["id"])
+    _trigger_auto_analysis()
+    return processed
 
 
 @app.post("/api/items/pdf", response_model=InboxItem)
@@ -449,7 +539,9 @@ async def create_pdf_item(file: UploadFile = File(...)):
             detail="Unable to save PDF. Please try again.",
         ) from exc
 
-    return _process_pdf_item(item["id"])
+    processed = _process_pdf_item(item["id"])
+    _trigger_auto_analysis()
+    return processed
 
 
 @app.post("/api/items/image", response_model=InboxItem)
@@ -495,7 +587,9 @@ async def create_image_item(file: UploadFile = File(...)):
             detail="Unable to save image. Please try again.",
         ) from exc
 
-    return _process_image_item(item["id"])
+    processed = _process_image_item(item["id"])
+    _trigger_auto_analysis()
+    return processed
 
 
 @app.post("/api/items/voice", response_model=InboxItem)
@@ -547,7 +641,9 @@ async def create_voice_item(file: UploadFile = File(...)):
             detail="Unable to save voice note. Please try again.",
         ) from exc
 
-    return _process_voice_item(item["id"])
+    processed = _process_voice_item(item["id"])
+    _trigger_auto_analysis()
+    return processed
 
 
 @app.get("/api/items/{item_id}/file")
@@ -598,6 +694,7 @@ def patch_extracted_text(item_id: int, payload: ExtractedTextUpdate):
     updated = update_item_extracted_text(item_id, payload.extracted_text)
     if updated is None:
         raise HTTPException(status_code=404, detail="Item not found.")
+    _trigger_auto_analysis()
     return updated
 
 
@@ -614,12 +711,15 @@ def retry_item_processing(item_id: int):
     if item["processing_status"] == "ready":
         return item
     if item["item_type"] == "url":
-        return _process_url_item(item_id)
-    if item["item_type"] == "pdf":
-        return _process_pdf_item(item_id)
-    if item["item_type"] == "image":
-        return _process_image_item(item_id)
-    return _process_voice_item(item_id)
+        processed = _process_url_item(item_id)
+    elif item["item_type"] == "pdf":
+        processed = _process_pdf_item(item_id)
+    elif item["item_type"] == "image":
+        processed = _process_image_item(item_id)
+    else:
+        processed = _process_voice_item(item_id)
+    _trigger_auto_analysis()
+    return processed
 
 
 @app.get("/api/items", response_model=List[InboxItem])
@@ -671,6 +771,7 @@ def update_item(item_id: int, payload: InboxItemUpdate):
 
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found.")
+    _trigger_auto_analysis()
     return item
 
 
@@ -697,13 +798,15 @@ def delete_item(item_id: int):
 @app.post("/api/notes", response_model=Note, deprecated=True)
 def create_note(payload: NoteCreate):
     try:
-        return add_note_to_db(payload.text)
+        note = add_note_to_db(payload.text)
     except Exception as exc:
         logger.exception("Failed to save note")
         raise HTTPException(
             status_code=500,
             detail="Unable to save note. Please try again.",
         ) from exc
+    _trigger_auto_analysis()
+    return note
 
 
 @app.get("/api/notes", response_model=List[Note], deprecated=True)
@@ -731,6 +834,7 @@ def update_note(note_id: int, payload: NoteUpdate):
 
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found.")
+    _trigger_auto_analysis()
     return note
 
 
@@ -913,22 +1017,11 @@ def calendar_preview(payload: CalendarPreviewRequest):
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Task has no normalized date. Confirm timing before "
-                    "previewing a calendar event."
+                    "Task has no date, so there is nothing to put on a "
+                    "calendar."
                 ),
             )
         start = parsed.due_date
-
-    if not task.get("timing_confirmed"):
-        parsed = parse_timing_phrase(task.get("timing_text"))
-        if parsed.needs_confirmation:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Confirm the task date before creating a calendar preview. "
-                    "Ambiguous timing requires explicit confirmation."
-                ),
-            )
 
     adapter = get_calendar_adapter()
     draft = adapter.preview_event(
@@ -1205,6 +1298,7 @@ def get_pending_analysis():
     return {
         "pending_count": len(pending),
         "pending_item_ids": [note["id"] for note in pending],
+        "analyzing": auto_analyzer.busy or _analysis_lock.locked(),
     }
 
 
@@ -1212,29 +1306,13 @@ def get_pending_analysis():
 def analyze_inbox(scope: str = Query("new", pattern="^(new|all)$")):
     """Analyze notes that are new (or edited) since their last analysis.
 
-    ``scope=all`` re-analyzes the whole inbox and replaces the saved view.
+    New notes are also analyzed automatically when they are saved; this
+    endpoint is the manual trigger. ``scope=all`` re-analyzes the whole inbox
+    and replaces the saved view.
     """
-    run_id = None
     try:
-        previous = None
-        if scope == "new":
-            previous = get_latest_successful_analysis()
-            notes = list_pending_notes_from_db()
-            if previous is not None and not notes and not previous["is_stale"]:
-                return {**previous, "analyzed_item_ids": []}
-        else:
-            notes = list_notes_from_db()
-
-        run_id = start_analysis_run()
-        raw_result = analyze_inbox_with_openai(notes)
-        result = validate_analysis_result(raw_result, notes)
-        return complete_analysis_run(run_id, result, previous=previous)
+        return _run_analysis(scope)
     except Exception as exc:
-        if run_id is not None:
-            try:
-                fail_analysis_run(run_id)
-            except Exception:
-                logger.exception("Failed to mark analysis run as failed")
         logger.exception("Failed to analyze inbox")
         raise HTTPException(
             status_code=500,
@@ -1242,6 +1320,29 @@ def analyze_inbox(scope: str = Query("new", pattern="^(new|all)$")):
         ) from exc
 
 
+_STATIC_REF = re.compile(r'(["\'])(/static/[^"\'?]+\.(?:js|css))\1')
+
+
+def _versioned_static_refs(html: str) -> str:
+    """Append ?v=<file mtime> to script/stylesheet URLs.
+
+    The URL changes whenever a file does, so a browser can never keep running
+    an old script against a newer page, even on a normal reload.
+    """
+
+    def add_version(match):
+        quote, url = match.group(1), match.group(2)
+        file_path = APP_DIR / url.removeprefix("/")
+        try:
+            version = file_path.stat().st_mtime_ns
+        except OSError:
+            return match.group(0)
+        return f"{quote}{url}?v={version}{quote}"
+
+    return _STATIC_REF.sub(add_version, html)
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return (APP_DIR / "templates" / "index.html").read_text(encoding="utf-8")
+    html = (APP_DIR / "templates" / "index.html").read_text(encoding="utf-8")
+    return _versioned_static_refs(html)

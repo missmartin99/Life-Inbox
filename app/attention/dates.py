@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import calendar
 import os
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -18,8 +19,12 @@ def configured_timezone() -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
+def now_in_configured_tz() -> datetime:
+    return datetime.now(configured_timezone())
+
+
 def today_in_configured_tz() -> date:
-    return datetime.now(configured_timezone()).date()
+    return now_in_configured_tz().date()
 
 
 @dataclass
@@ -30,6 +35,52 @@ class ParsedTiming:
     needs_confirmation: bool
     normalized_iso: Optional[str]
     note: Optional[str] = None
+    # Time of day when the phrase names one ("12:15 pm today"); else None.
+    due_time: Optional[time] = None
+
+
+_CLOCK = re.compile(r"\b(\d{1,2}):(\d{2})\s*(am|pm|a\.m\.|p\.m\.)?", re.I)
+_HOUR_ONLY = re.compile(r"\b(\d{1,2})\s*(am|pm|a\.m\.|p\.m\.)", re.I)
+
+
+def parse_time_of_day(phrase: Optional[str]) -> Optional[time]:
+    """Pull a clock time out of a phrase, or None when it is missing/ambiguous.
+
+    "12:15 pm", "5pm", "17:30" and "noon" are understood. A bare "5:30" with
+    no am/pm is ambiguous, so it counts as no time rather than guessing and
+    marking a task overdue too early.
+    """
+    text = (phrase or "").strip().lower()
+    if not text:
+        return None
+    if re.search(r"\bnoon\b", text):
+        return time(12, 0)
+
+    match = _CLOCK.search(text)
+    if match:
+        hour, minute = int(match.group(1)), int(match.group(2))
+        meridiem = (match.group(3) or "").replace(".", "")
+    else:
+        match = _HOUR_ONLY.search(text)
+        if not match:
+            return None
+        hour, minute = int(match.group(1)), 0
+        meridiem = match.group(2).replace(".", "")
+
+    if minute > 59:
+        return None
+    if meridiem:
+        if not 1 <= hour <= 12:
+            return None
+        if meridiem == "pm" and hour != 12:
+            hour += 12
+        if meridiem == "am" and hour == 12:
+            hour = 0
+    elif hour == 12 or 13 <= hour <= 23:
+        pass  # unambiguous on a 24-hour clock
+    else:
+        return None
+    return time(hour, minute)
 
 
 _ISO = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
@@ -37,6 +88,25 @@ _MDY = re.compile(
     r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
     r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|"
     r"dec(?:ember)?)\s+(\d{1,2})(?:,?\s*(20\d{2}))?\b",
+    re.I,
+)
+_MONTH_NAMES = (
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|"
+    r"dec(?:ember)?"
+)
+# "21 November", "20th of November 2026"
+_DMY = re.compile(
+    rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({_MONTH_NAMES})\b(?:,?\s*(20\d{{2}}))?",
+    re.I,
+)
+# "21/11/26", "21-11-2026", "21.11.2026" (day first, as is usual in India/UK)
+_NUMERIC_DATE = re.compile(
+    r"(?<![\d/.\-])(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4}|\d{2})(?!\d)"
+)
+# "the 30th", "20th of this month", "5th of next month"
+_ORDINAL = re.compile(
+    r"\b(\d{1,2})(?:st|nd|rd|th)\b(?:\s+of\s+(this|next|the)\s+month)?",
     re.I,
 )
 _IN_DAYS = re.compile(r"\bin\s+(\d+)\s+days?\b", re.I)
@@ -82,7 +152,7 @@ _WEEKDAYS = {
 }
 
 
-def parse_timing_phrase(
+def _parse_date_phrase(
     phrase: Optional[str],
     *,
     reference: Optional[date] = None,
@@ -111,7 +181,10 @@ def parse_timing_phrase(
             note="Urgent/ASAP treated as today but needs confirmation.",
         )
 
-    if re.search(r"\btoday\b", lower):
+    if re.search(
+        r"\b(today|tonight|this (?:morning|afternoon|evening)|end of (?:the )?day|eod)\b",
+        lower,
+    ):
         return ParsedTiming(
             original_phrase=original,
             due_date=ref,
@@ -120,7 +193,27 @@ def parse_timing_phrase(
             normalized_iso=ref.isoformat(),
         )
 
-    if re.search(r"\btomorrow\b", lower):
+    if re.search(r"\bday after tomorrow\b", lower):
+        due = ref + timedelta(days=2)
+        return ParsedTiming(
+            original_phrase=original,
+            due_date=due,
+            confidence="high",
+            needs_confirmation=False,
+            normalized_iso=due.isoformat(),
+        )
+
+    if re.search(r"\byesterday\b", lower):
+        due = ref - timedelta(days=1)
+        return ParsedTiming(
+            original_phrase=original,
+            due_date=due,
+            confidence="high",
+            needs_confirmation=False,
+            normalized_iso=due.isoformat(),
+        )
+
+    if re.search(r"\b(?:tomorrow|tmrw|tmr|tom)\b", lower):
         due = ref + timedelta(days=1)
         return ParsedTiming(
             original_phrase=original,
@@ -152,6 +245,40 @@ def parse_timing_phrase(
             confidence="high",
             needs_confirmation=False,
             normalized_iso=due.isoformat(),
+        )
+
+    numeric = _NUMERIC_DATE.search(original)
+    if numeric:
+        first, second = int(numeric.group(1)), int(numeric.group(2))
+        year = int(numeric.group(3))
+        if year < 100:
+            year += 2000
+        ambiguous = False
+        if first > 12 >= second:
+            day, month = first, second
+        elif second > 12 >= first:
+            day, month = second, first  # month/day/year
+        else:
+            day, month = first, second
+            ambiguous = first != second and first <= 12 and second <= 12
+        try:
+            due = date(year, month, day)
+        except ValueError:
+            return ParsedTiming(
+                original_phrase=original,
+                due_date=None,
+                confidence="low",
+                needs_confirmation=True,
+                normalized_iso=None,
+                note="Could not parse calendar date.",
+            )
+        return ParsedTiming(
+            original_phrase=original,
+            due_date=due,
+            confidence="medium" if ambiguous else "high",
+            needs_confirmation=ambiguous,
+            normalized_iso=due.isoformat(),
+            note="Read as day/month/year; confirm." if ambiguous else None,
         )
 
     in_days = _IN_DAYS.search(original)
@@ -193,6 +320,102 @@ def parse_timing_phrase(
             note=None if confidence == "high" else "Year inferred; confirm.",
         )
 
+    dmy = _DMY.search(original)
+    if dmy:
+        day = int(dmy.group(1))
+        month = _MONTHS[dmy.group(2).lower()]
+        year = int(dmy.group(3)) if dmy.group(3) else ref.year
+        try:
+            due = date(year, month, day)
+        except ValueError:
+            return ParsedTiming(
+                original_phrase=original,
+                due_date=None,
+                confidence="low",
+                needs_confirmation=True,
+                normalized_iso=None,
+                note="Could not parse calendar date.",
+            )
+        if dmy.group(3) is None and due < ref:
+            due = date(year + 1, month, day)
+        confidence = "high" if dmy.group(3) else "medium"
+        return ParsedTiming(
+            original_phrase=original,
+            due_date=due,
+            confidence=confidence,
+            needs_confirmation=confidence != "high",
+            normalized_iso=due.isoformat(),
+            note=None if confidence == "high" else "Year inferred; confirm.",
+        )
+
+    ordinal = _ORDINAL.search(original)
+    if ordinal:
+        day = int(ordinal.group(1))
+        scope = (ordinal.group(2) or "").lower()
+        if scope == "next":
+            month_index = ref.year * 12 + ref.month  # 0-based month + 1
+        elif scope in {"this", "the"}:
+            month_index = ref.year * 12 + ref.month - 1
+        else:
+            # "the 30th": the next time that day comes around.
+            month_index = ref.year * 12 + ref.month - 1
+            if day < ref.day:
+                month_index += 1
+        year, month = divmod(month_index, 12)
+        month += 1
+        if 1 <= day <= calendar.monthrange(year, month)[1]:
+            due = date(year, month, day)
+            explicit = bool(scope)
+            return ParsedTiming(
+                original_phrase=original,
+                due_date=due,
+                confidence="high" if explicit else "medium",
+                needs_confirmation=not explicit,
+                normalized_iso=due.isoformat(),
+                note=None if explicit else "Month inferred; confirm.",
+            )
+        return ParsedTiming(
+            original_phrase=original,
+            due_date=None,
+            confidence="low",
+            needs_confirmation=True,
+            normalized_iso=None,
+            note="That day does not exist in the inferred month.",
+        )
+
+    if re.search(r"\b(?:end of (?:the |this )?month|eom)\b", lower):
+        due = date(ref.year, ref.month, calendar.monthrange(ref.year, ref.month)[1])
+        return ParsedTiming(
+            original_phrase=original,
+            due_date=due,
+            confidence="medium",
+            needs_confirmation=True,
+            normalized_iso=due.isoformat(),
+            note="End of month normalized to the last day; confirm if needed.",
+        )
+
+    if re.search(r"\bnext week\b", lower):
+        due = ref + timedelta(days=7 - ref.weekday())
+        return ParsedTiming(
+            original_phrase=original,
+            due_date=due,
+            confidence="medium",
+            needs_confirmation=True,
+            normalized_iso=due.isoformat(),
+            note="Next week normalized to Monday; confirm if needed.",
+        )
+
+    if re.search(r"\b(?:this week|end of (?:the |this )?week)\b", lower):
+        due = ref if ref.weekday() > 4 else ref + timedelta(days=4 - ref.weekday())
+        return ParsedTiming(
+            original_phrase=original,
+            due_date=due,
+            confidence="medium",
+            needs_confirmation=True,
+            normalized_iso=due.isoformat(),
+            note="This week normalized to Friday; confirm if needed.",
+        )
+
     weekday = _WEEKDAY.search(original)
     if weekday:
         target = _WEEKDAYS[weekday.group(2).lower()]
@@ -221,12 +444,31 @@ def parse_timing_phrase(
     )
 
 
+def parse_timing_phrase(
+    phrase: Optional[str],
+    *,
+    reference: Optional[date] = None,
+) -> ParsedTiming:
+    parsed = _parse_date_phrase(phrase, reference=reference)
+    if parsed.due_date is not None:
+        parsed.due_time = parse_time_of_day(phrase)
+    return parsed
+
+
 def classify_attention_bucket(
     due: Optional[date],
     *,
     reference: Optional[date] = None,
     snoozed_until: Optional[date] = None,
+    due_time: Optional[time] = None,
+    now: Optional[datetime] = None,
 ) -> str:
+    """Bucket a task as snoozed/unscheduled/overdue/today/upcoming.
+
+    A task due today with a clock time becomes overdue once that time has
+    passed. The time check uses ``now`` (or the real clock when no reference
+    date was given).
+    """
     ref = reference or today_in_configured_tz()
     if snoozed_until and snoozed_until > ref:
         return "snoozed"
@@ -235,5 +477,14 @@ def classify_attention_bucket(
     if due < ref:
         return "overdue"
     if due == ref:
+        current = now
+        if current is None and reference is None:
+            current = now_in_configured_tz()
+        if (
+            due_time is not None
+            and current is not None
+            and current.replace(tzinfo=None).time() > due_time
+        ):
+            return "overdue"
         return "today"
     return "upcoming"
