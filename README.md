@@ -196,6 +196,28 @@ Without AI (or for sensitive items) only people are found, from clues like
 - `GET /api/entities?type=person` lists entities, most-mentioned first;
 - `GET /api/entities/{id}` returns the entity and every item that mentions it.
 
+### Semantic search (meaning, not just keywords)
+
+With embeddings on, search and Ask My Inbox match by meaning: "teeth checkup"
+finds a dentist note even with no shared words. A small model
+(`all-MiniLM-L6-v2`, ~90 MB, downloaded on first use) runs locally through
+`fastembed`, so note text is never sent anywhere. Vectors are cached in the
+`embedding_cache` table by a hash of the text.
+
+Turn it on (e.g. in `.env`):
+
+```bash
+LIFE_INBOX_EMBEDDINGS=1
+```
+
+Search results include `meaning_score` next to `keyword_score`. Measure the
+difference on sample data with `python -m scripts.eval_search`:
+
+| Search | Reworded questions (hit@1) | Exact-word questions (hit@1) |
+|---|---|---|
+| Keyword only | 0/12 | 5/5 |
+| Keyword + embeddings | 12/12 | 5/5 |
+
 ## 4. Optional: configure OpenAI
 
 If you want AI analysis instead of the local fallback, set your API key in the

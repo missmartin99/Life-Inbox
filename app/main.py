@@ -1253,6 +1253,7 @@ def search_inbox(
             score=round(row.score, 4),
             keyword_score=round(row.keyword_score, 4),
             semantic_score=round(row.semantic_score, 4),
+            meaning_score=round(row.meaning_score, 4),
         )
         for row in ranked
     ]

@@ -308,6 +308,7 @@ class SearchHit(BaseModel):
     score: float
     keyword_score: float
     semantic_score: float
+    meaning_score: float = 0.0
 
 
 class AskRequest(BaseModel):

@@ -23,6 +23,7 @@ services:
       LIFE_INBOX_ALLOW_DEV_LOGIN: "0"
       LIFE_INBOX_AUTH_MODE: google_stub
       LIFE_INBOX_TIMEZONE: UTC
+      LIFE_INBOX_EMBEDDINGS: "1"
     volumes:
       - uploads:/data/uploads
     depends_on:

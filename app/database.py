@@ -159,6 +159,17 @@ class ItemEntityRecord(Base):
     )
 
 
+class EmbeddingCacheRecord(Base):
+    """Saved embedding vectors, keyed by a hash of the text they came from."""
+
+    __tablename__ = "embedding_cache"
+
+    text_hash = Column(Text, primary_key=True)
+    model = Column(Text, primary_key=True)
+    vector = Column(Text, nullable=False)  # JSON list of floats
+    created_at = Column(Text, nullable=False)
+
+
 class AiCallLogRecord(Base):
     """One row per AI call: what feature, which model, how much was sent.
 
@@ -2094,3 +2105,40 @@ def get_entity_page(entity_id: int) -> Optional[dict]:
         page = _entity_to_dict(entity)
         page["items"] = [_item_to_dict(item) for item in items]
         return page
+
+
+# ---------------------------------------------------------------------------
+# Semantic search: embedding cache
+# ---------------------------------------------------------------------------
+
+
+def load_cached_vectors(hashes: list, model: str) -> dict:
+    """{text_hash: vector} for the hashes that are already in the cache."""
+    if not hashes:
+        return {}
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(EmbeddingCacheRecord).where(
+                EmbeddingCacheRecord.model == model,
+                EmbeddingCacheRecord.text_hash.in_(set(hashes)),
+            )
+        )
+        return {row.text_hash: json.loads(row.vector) for row in rows}
+
+
+def save_cached_vectors(vectors: dict, model: str) -> None:
+    from app.retrieval.embeddings import vector_to_text
+
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        for text_hash, vector in vectors.items():
+            # merge = insert, or update if this hash is already there
+            session.merge(
+                EmbeddingCacheRecord(
+                    text_hash=text_hash,
+                    model=model,
+                    vector=vector_to_text(vector),
+                    created_at=now,
+                )
+            )
+        session.commit()
