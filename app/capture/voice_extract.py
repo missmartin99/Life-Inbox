@@ -7,6 +7,11 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from app.capture.gnani_stt import (
+    GnaniError,
+    gnani_configured,
+    transcribe_with_gnani,
+)
 from app.capture.storage import MAX_AUDIO_BYTES
 
 logger = logging.getLogger(__name__)
@@ -146,15 +151,36 @@ def transcribe_audio(
             "note": "Transcription disabled via LIFE_INBOX_DISABLE_TRANSCRIPTION.",
         }
 
+    gnani_note: Optional[str] = None
+    if gnani_configured():
+        try:
+            text = transcribe_with_gnani(
+                data, original_filename=original_filename
+            )
+            return {
+                "text": text,
+                "provider": "gnani",
+                "available": True,
+                "note": None if text else "Transcription returned no spoken text.",
+            }
+        except GnaniError as exc:
+            gnani_note = str(exc)
+            logger.warning("Gnani transcription failed: %s", gnani_note)
+        except Exception:
+            logger.exception("Unexpected Gnani transcription error")
+            gnani_note = _friendly_transcription_unavailable_note()
+
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         return {
             "text": "",
-            "provider": "none",
+            "provider": "unavailable" if gnani_note else "none",
             "available": False,
-            "note": (
-                "Transcription not configured. Set OPENAI_API_KEY for live "
-                "transcription, or edit the transcript manually."
+            "note": gnani_note
+            or (
+                "Transcription not configured. Set GNANI_API_KEY or "
+                "OPENAI_API_KEY for live transcription, or edit the "
+                "transcript manually."
             ),
         }
 
