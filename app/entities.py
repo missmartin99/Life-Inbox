@@ -148,6 +148,36 @@ def detect_entity_themes(items):
     return " and ".join(themes[:2])
 
 
+def extract_clean_highlight(text: str) -> str:
+    """Extract a complete, grammatical highlight sentence without cutoffs or ellipses."""
+    line = text.strip().split("\n")[0].strip()
+    protected = (
+        line.replace("Dr. ", "Dr__ ")
+        .replace("Mr. ", "Mr__ ")
+        .replace("Ms. ", "Ms__ ")
+        .replace("Mrs. ", "Mrs__ ")
+    )
+    m = re.split(r"\.\s+(?=[A-Z])", protected)
+    sentence = (
+        m[0]
+        .replace("Dr__ ", "Dr. ")
+        .replace("Mr__ ", "Mr. ")
+        .replace("Ms__ ", "Ms. ")
+        .replace("Mrs__ ", "Mrs. ")
+    )
+    sentence = re.sub(r"\.{2,}|…$", "", sentence).strip().rstrip(",- ")
+    if len(sentence) > 160:
+        match = re.search(r"^(.{60,150})[,;]", sentence)
+        if match:
+            sentence = match.group(1).strip()
+        else:
+            sentence = sentence[:150].rsplit(" ", 1)[0].rstrip(",- ")
+    sentence = re.sub(r"[,;\-\s]+[A-Za-z]?$", "", sentence).strip()
+    if not sentence.endswith((".", "!", "?")):
+        sentence += "."
+    return sentence
+
+
 def fallback_entity_summary(
     entity_name: str,
     entity_type: str,
@@ -155,53 +185,59 @@ def fallback_entity_summary(
     start_date: str = None,
     end_date: str = None,
 ) -> str:
-    """Conversational, friendly second-brain summary synthesized from notes and timeline."""
+    """Rich, conversational second-brain intelligence dossier synthesized from notes and timeline."""
     count = len(items)
     if count == 0:
         if start_date or end_date:
             range_label = format_human_range(start_date, end_date)
-            return f"You don't have any notes mentioning {entity_name} {range_label}."
-        return f"You don't have any recorded notes mentioning {entity_name} yet."
+            return f"You don't have any notes mentioning **{entity_name}** {range_label}."
+        return f"You don't have any recorded notes mentioning **{entity_name}** yet."
 
     dates = [it.get("created_at") for it in items if it.get("created_at")]
     if dates:
         d_sorted = sorted(dates)
         time_span = format_human_range(d_sorted[0], d_sorted[-1])
+        start_date_human = d_sorted[0][:10]
+        end_date_human = d_sorted[-1][:10]
     else:
         time_span = ""
+        start_date_human = "earlier"
+        end_date_human = "recently"
 
     theme_desc = detect_entity_themes(items)
 
-    clean_snippet = ""
+    # Gather 3 to 5 clean, non-duplicate concrete facts or quotes
+    facts = []
+    seen = set()
     for it in items:
         cand = (it.get("title") or it.get("raw_text") or "").strip()
         if not cand:
             continue
-        if ":" in cand:
-            prefix = cand.split(":")[0].strip()
-            if 10 <= len(prefix) <= 75 and not prefix.endswith(("...", "…")):
-                clean_snippet = prefix
-                break
-        first_sentence = re.split(r"\.\s+|\n", cand)[0].strip()
-        if 15 <= len(first_sentence) <= 90 and not first_sentence.endswith(("...", "…")):
-            clean_snippet = first_sentence
+        clean_fact = extract_clean_highlight(cand)
+        key = clean_fact[:45].lower()
+        if key not in seen and len(clean_fact) >= 20:
+            seen.add(key)
+            facts.append(clean_fact)
+        if len(facts) >= 4:
             break
-        if len(cand) > 80:
-            cand = cand[:80].rsplit(" ", 1)[0]
-        clean_snippet = cand.rstrip(",.-… ")
-        break
 
     notes_word = "note" if count == 1 else "notes"
     if entity_type == "person":
-        res = f"You've referenced {entity_name} in {count} {notes_word} {time_span}, focusing mainly on {theme_desc}."
+        role_desc = f"**{entity_name}** is an important personal and professional contact referenced across **{count} {notes_word}** {time_span}. Your recorded logs primarily center around {theme_desc}."
     elif entity_type == "place":
-        res = f"{entity_name} appears across {count} of your {notes_word} {time_span}, primarily covering {theme_desc}."
+        role_desc = f"**{entity_name}** is a featured location logged across **{count} {notes_word}** {time_span}. Your notes chronicle {theme_desc}."
     else:
-        res = f"You have {count} {notes_word} connected to {entity_name} {time_span}, centered on {theme_desc}."
+        role_desc = f"**{entity_name}** is an active organization connected to **{count} {notes_word}** {time_span}, centered on {theme_desc}."
 
-    if clean_snippet:
-        res += f' For example: "{clean_snippet}".'
-    return res
+    bullet_lines = "\n".join(f"• {f}" for f in facts) if facts else f"• Continuous touchpoints logged {time_span}."
+
+    return f"""{role_desc}
+
+**Key Patterns & Recorded Highlights:**
+{bullet_lines}
+
+**Second-Brain Context & Timeline:**
+Your records document continuous touchpoints from {start_date_human} to {end_date_human}. Across this timeframe, {entity_name} represents one of your primary anchors for {theme_desc}."""
 
 
 def summarize_entity(
@@ -211,12 +247,12 @@ def summarize_entity(
     start_date: str = None,
     end_date: str = None,
 ) -> str:
-    """Synthesize a warm, conversational executive dossier summary of an entity."""
+    """Synthesize a comprehensive, user-friendly second-brain executive dossier summary."""
     if not items:
         if start_date or end_date:
             range_label = format_human_range(start_date, end_date)
-            return f"You don't have any notes mentioning {entity_name} {range_label}."
-        return f"You don't have any recorded notes mentioning {entity_name} yet."
+            return f"You don't have any notes mentioning **{entity_name}** {range_label}."
+        return f"You don't have any recorded notes mentioning **{entity_name}** yet."
 
     has_sensitive = any(item.get("is_sensitive") for item in items)
     if has_sensitive or not ai_is_configured():
@@ -227,7 +263,7 @@ def summarize_entity(
         text = (it.get("extracted_text") or it.get("raw_text") or it.get("title") or "").strip()
         if text:
             created = (it.get("created_at") or "")[:10]
-            snippets.append(f"- [{created}] {text[:200]}")
+            snippets.append(f"- [{created}] {text[:220]}")
 
     if not snippets:
         return fallback_entity_summary(entity_name, entity_type, items, start_date, end_date)
@@ -235,7 +271,7 @@ def summarize_entity(
     time_context = format_human_range(start_date, end_date)
     time_instruction = f"The user has filtered for notes {time_context}." if time_context else ""
 
-    prompt = f"""You are the user's personal second-brain AI assistant. Write a warm, friendly, conversational 2-sentence summary about {entity_name} ({entity_type}) based on the user's private notes below.
+    prompt = f"""You are the user's personal second-brain AI assistant. Write a detailed, warm, highly useful dossier briefing about {entity_name} ({entity_type}) based on the user's private notes below.
 
 Entity: {entity_name} ({entity_type})
 Total notes in view: {len(items)}
@@ -244,15 +280,15 @@ Total notes in view: {len(items)}
 Notes mentioning this entity:
 {chr(10).join(snippets[:10])}
 
-Guidelines:
-- Talk directly to the user in a natural, helpful, conversational tone (e.g. "You've visited...", "Your notes about Jaipur focus on...").
-- Mention the timeline span and the primary reasons/patterns for interacting with {entity_name}.
-- Avoid robotic database phrases like "is an organization referenced across".
-- Ensure the summary is fully written out, friendly, and under 60 words.
-"""
+Format the summary with markdown sections:
+1. A conversational 2-sentence executive summary of who/what they are in the user's life and what domains they touch.
+2. A bulleted section titled "**Key Patterns & Recorded Highlights:**" with 3-4 specific facts, decisions, prescriptions, venues, or topics extracted from the notes.
+3. A concluding sentence titled "**Second-Brain Context & Timeline:**" explaining the time span and relevance to the user.
+
+Ensure the summary is insightful, complete, friendly, and directly useful for the user."""
     try:
         reply = ask_ai(prompt, feature="entity_summary")
-        if reply and len(reply.strip()) > 15:
+        if reply and len(reply.strip()) > 30:
             return reply.strip()
     except Exception:
         logger.warning(f"Entity summary failed for {entity_name}; using fallback", exc_info=True)

@@ -349,3 +349,15 @@ class AskResponse(BaseModel):
     mode: Literal["llm_grounded", "extractive_fallback", "task_board"] = (
         "extractive_fallback"
     )
+
+
+class SmartCardUpdate(BaseModel):
+    kind: str
+    fields: dict = {}
+
+
+class SmartCardCreate(BaseModel):
+    kind: str
+    title: Optional[str] = None
+    fields: dict = {}
+

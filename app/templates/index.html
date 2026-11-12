@@ -498,17 +498,41 @@
             <span class="mono eyebrow-sm" style="color:var(--text-3)">Total Tracked Expenses</span>
             <div id="expenseTotalAmount" class="expense-amount">₹0.00</div>
             <div id="expenseMonthLabel" class="muted" style="font-size:13px; margin-top:2px;">All-time receipts</div>
+            <button type="button" class="secondary" style="font-size:12px; padding:4px 10px; margin-top:8px; display:inline-flex; align-items:center; gap:6px;" onclick="exportExpensesToCsv()">
+              <span>📥</span> Export Expense CSV
+            </button>
           </div>
-          <div id="expenseCategoryBreakdown" style="flex:2 1 300px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;"></div>
+          <div style="flex:2 1 300px;">
+            <div class="mono" style="font-size:11px; color:var(--muted); margin-bottom:6px; text-transform:uppercase;">Click a category to filter receipts:</div>
+            <div id="expenseCategoryBreakdown" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;"></div>
+          </div>
+        </div>
+
+        <!-- Smart Cards Toolbar -->
+        <div class="cards-toolbar">
+          <div class="cards-search-wrap">
+            <input type="search" id="cardsSearchInput" class="cards-search-input" placeholder="🔍 Search cards by vendor, ingredient, book, contact, title…" oninput="onCardsSearchInput(this.value)">
+          </div>
+          <div class="cards-sort-wrap">
+            <label for="cardsSortSelect" class="cards-sort-label">Sort:</label>
+            <select id="cardsSortSelect" class="cards-sort-select" onchange="onCardsSortChange(this.value)">
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="amount-high">Amount: High → Low</option>
+              <option value="amount-low">Amount: Low → High</option>
+              <option value="alpha">Alphabetical (A–Z)</option>
+            </select>
+          </div>
+          <button type="button" class="secondary" onclick="openNewCardModal()">+ New Smart Card</button>
         </div>
 
         <div class="feature-bar">
-          <button type="button" class="chip active" onclick="filterCardsByKind('')">All</button>
-          <button type="button" class="chip" onclick="filterCardsByKind('receipt')">🧾 Receipts & Bills</button>
-          <button type="button" class="chip" onclick="filterCardsByKind('recipe')">🍳 Recipes</button>
-          <button type="button" class="chip" onclick="filterCardsByKind('book')">📚 Books</button>
-          <button type="button" class="chip" onclick="filterCardsByKind('contact')">📇 Contacts</button>
-          <button type="button" class="chip" onclick="filterCardsByKind('event')">📅 Events</button>
+          <button type="button" class="chip active" id="chip-cards-all" onclick="filterCardsByKind('')">All <span id="count-cards-all" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-receipt" onclick="filterCardsByKind('receipt')">🧾 Receipts & Bills <span id="count-cards-receipt" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-recipe" onclick="filterCardsByKind('recipe')">🍳 Recipes <span id="count-cards-recipe" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-book" onclick="filterCardsByKind('book')">📚 Books <span id="count-cards-book" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-contact" onclick="filterCardsByKind('contact')">📇 Contacts <span id="count-cards-contact" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-event" onclick="filterCardsByKind('event')">📅 Events <span id="count-cards-event" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
           <button type="button" class="secondary" style="margin-left:auto" onclick="convertAllNotesToCards()">✨ Auto-Format Notes into Cards</button>
         </div>
         <p id="cardsStatus" class="status muted" role="status" aria-live="polite"></p>
@@ -582,6 +606,96 @@
       </div>
     </section>
   </main>
+
+  <!-- Modal: Create New Smart Card -->
+  <div id="newCardModal" class="tour-modal-backdrop" hidden>
+    <div class="tour-modal app-form-modal">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <div>
+          <h3 style="font-size:1.3rem; color:var(--text);">✨ Create Smart Card</h3>
+          <p class="muted" style="font-size:13px; margin-top:2px;">Add a new typed card with structured fields.</p>
+        </div>
+        <button type="button" class="secondary icon-btn" onclick="closeNewCardModal()" title="Close">&times;</button>
+      </div>
+
+      <form id="newCardForm" onsubmit="submitNewSmartCard(event)" style="display:flex; flex-direction:column; gap:14px;">
+        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+          <label style="flex:1 1 180px;">
+            Card Type
+            <select id="newCardKindSelect" onchange="onNewCardKindChange(this.value)" style="width:100%; margin-top:4px;">
+              <option value="receipt">🧾 Receipt / Bill</option>
+              <option value="recipe">🍳 Recipe</option>
+              <option value="contact">📇 Contact</option>
+              <option value="book">📚 Book</option>
+              <option value="event">📅 Event</option>
+            </select>
+          </label>
+          <label style="flex:2 1 240px;">
+            Title / Name
+            <input type="text" id="newCardTitleInput" required placeholder="e.g. Apollo Pharmacy, Paneer Tikka, Dr. Mehta..." style="width:100%; margin-top:4px;">
+          </label>
+        </div>
+
+        <!-- Dynamic Fields Container -->
+        <div id="newCardDynamicFields" style="display:flex; flex-direction:column; gap:12px;"></div>
+
+        <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:12px;">
+          <button type="button" class="secondary" onclick="closeNewCardModal()">Cancel</button>
+          <button type="submit" class="primary">Save Smart Card</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Recipe Cook Mode -->
+  <div id="recipeCookModal" class="tour-modal-backdrop" hidden>
+    <div class="tour-modal recipe-cook-modal">
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line); padding-bottom:14px; margin-bottom:16px;">
+        <div>
+          <div class="feature-badge recipe" style="display:inline-block; margin-bottom:4px;">🍳 COOK MODE</div>
+          <h2 id="cookRecipeTitle" style="font-size:1.45rem; color:var(--text); margin:0;">Recipe Title</h2>
+          <div id="cookRecipeMeta" class="muted mono" style="font-size:12.5px; margin-top:4px;">Prep: 30 mins · 4 servings</div>
+        </div>
+        <button type="button" class="secondary icon-btn" onclick="closeRecipeCookMode()" title="Exit Cook Mode">&times;</button>
+      </div>
+
+      <!-- Kitchen Timer Widget -->
+      <div class="cook-timer-widget">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:1.4rem;">⏱️</span>
+          <div>
+            <div class="mono" style="font-size:11px; color:var(--indigo-text); text-transform:uppercase;">Kitchen Timer</div>
+            <div id="cookTimerDisplay" class="mono" style="font-size:1.8rem; font-weight:700; color:var(--text);">00:00</div>
+          </div>
+        </div>
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+          <button type="button" class="chip" onclick="setCookTimer(180)">3 min</button>
+          <button type="button" class="chip" onclick="setCookTimer(300)">5 min</button>
+          <button type="button" class="chip" onclick="setCookTimer(900)">15 min</button>
+          <button type="button" class="chip" onclick="setCookTimer(1800)">30 min</button>
+          <button type="button" id="cookTimerToggleBtn" class="secondary" onclick="toggleCookTimer()">Start</button>
+          <button type="button" class="secondary" onclick="resetCookTimer()">Reset</button>
+        </div>
+      </div>
+
+      <div class="cook-grid">
+        <!-- Ingredients Checklist -->
+        <div class="cook-col">
+          <h4 style="font-size:13px; text-transform:uppercase; color:var(--muted); margin-bottom:10px;">Ingredients Checklist</h4>
+          <div id="cookIngredientsList" class="cook-checklist"></div>
+        </div>
+        <!-- Steps / Method -->
+        <div class="cook-col">
+          <h4 style="font-size:13px; text-transform:uppercase; color:var(--muted); margin-bottom:10px;">Cooking Instructions</h4>
+          <div id="cookStepsList" class="cook-steps"></div>
+        </div>
+      </div>
+
+      <div style="text-align:right; margin-top:20px;">
+        <button type="button" class="magnetic" onclick="closeRecipeCookMode()">Done Cooking</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Floating Onboarding Tour & Feature Discovery -->
   <button type="button" id="tourFab" class="tour-floater-btn" onclick="openOnboardingTour()">

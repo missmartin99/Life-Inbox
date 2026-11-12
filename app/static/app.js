@@ -1478,7 +1478,7 @@ async function showDossier(entityId) {
     }
 
     if (summaryEl) {
-      summaryEl.textContent = 'Synthesizing conversational profile summary…';
+      summaryEl.innerHTML = '<span class="muted" style="font-size:13px;">Synthesizing comprehensive second-brain profile summary…</span>';
     }
 
     if (!data.items || data.items.length === 0) {
@@ -1498,12 +1498,12 @@ async function showDossier(entityId) {
     fetchJson(`/api/entities/${entityId}/summary${qs ? '?' + qs : ''}`, {}, 'Failed to fetch summary')
       .then(res => {
         if (summaryEl && currentDossierEntityId === entityId) {
-          summaryEl.textContent = res.summary;
+          summaryEl.innerHTML = renderMarkdownSnippet(res.summary);
         }
       })
       .catch(() => {
         if (summaryEl && currentDossierEntityId === entityId) {
-          summaryEl.textContent = 'Could not generate summary at this moment.';
+          summaryEl.innerHTML = '<span class="muted">Could not generate summary at this moment.</span>';
         }
       });
   } catch (e) {
@@ -1515,7 +1515,7 @@ async function refreshDossierSummary() {
   if (!currentDossierEntityId) return;
   const summaryEl = document.getElementById('dossierSummaryText');
   const btn = document.getElementById('refreshSummaryBtn');
-  if (summaryEl) summaryEl.textContent = 'Synthesizing updated profile summary…';
+  if (summaryEl) summaryEl.innerHTML = '<span class="muted" style="font-size:13px;">Synthesizing updated profile summary…</span>';
   if (btn) btn.disabled = true;
 
   try {
@@ -1525,12 +1525,58 @@ async function refreshDossierSummary() {
     const qs = params.toString();
 
     const res = await fetchJson(`/api/entities/${currentDossierEntityId}/summary${qs ? '?' + qs : ''}`, {}, 'Failed to refresh summary');
-    if (summaryEl) summaryEl.textContent = res.summary;
+    if (summaryEl) summaryEl.innerHTML = renderMarkdownSnippet(res.summary);
   } catch {
-    if (summaryEl) summaryEl.textContent = 'Failed to generate updated summary.';
+    if (summaryEl) summaryEl.innerHTML = '<span class="muted">Failed to generate updated summary.</span>';
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+function formatInlineMarkdown(str) {
+  if (!str) return '';
+  let s = esc(str);
+  s = s.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  return s;
+}
+
+function renderMarkdownSnippet(text) {
+  if (!text) return '';
+  const lines = text.split('\n');
+  let html = '';
+  let inList = false;
+
+  for (let rawLine of lines) {
+    let line = rawLine.trim();
+    if (!line) {
+      if (inList) {
+        html += '</ul>';
+        inList = false;
+      }
+      continue;
+    }
+
+    if (line.startsWith('•') || line.startsWith('- ') || line.startsWith('* ')) {
+      if (!inList) {
+        html += '<ul>';
+        inList = true;
+      }
+      let content = line.replace(/^[•\-\*]\s*/, '');
+      html += `<li>${formatInlineMarkdown(content)}</li>`;
+    } else {
+      if (inList) {
+        html += '</ul>';
+        inList = false;
+      }
+      html += `<p>${formatInlineMarkdown(line)}</p>`;
+    }
+  }
+
+  if (inList) {
+    html += '</ul>';
+  }
+  return html;
 }
 
 function closeDossier() {
@@ -1678,7 +1724,16 @@ window.addEventListener('resize', () => {
 });
 
 // --- 06 · Smart Cards & Expense Tracker ----------------------------------
-async function loadCards(kindFilter = '') {
+let allCardsCache = [];
+let currentCardKindFilter = '';
+let currentCardSearchQuery = '';
+let currentCardSort = 'newest';
+let currentCardCategoryFilter = '';
+let cookTimerSeconds = 0;
+let cookTimerInterval = null;
+
+async function loadCards(kindFilter = undefined) {
+  if (kindFilter !== undefined) currentCardKindFilter = kindFilter;
   const statusEl = document.getElementById('cardsStatus');
   const listEl = document.getElementById('cardsList');
   const totalAmountEl = document.getElementById('expenseTotalAmount');
@@ -1693,80 +1748,736 @@ async function loadCards(kindFilter = '') {
     }
     if (categoryBreakdownEl) {
       const cats = Object.entries(exp.by_category || {});
-      categoryBreakdownEl.innerHTML = cats.length ? cats.map(([cat, amt]) => `
-        <span class="feature-badge" style="background:rgba(52, 211, 153, 0.15); color:var(--green)">
-          ${esc(cat)}: ₹${amt.toLocaleString('en-IN')}
-        </span>
-      `).join('') : '<span class="muted" style="font-size:12px;">No receipt breakdowns yet.</span>';
-    }
+      categoryBreakdownEl.innerHTML = cats.length ? cats.map(([cat, amt]) => {
+        const isCatActive = currentCardCategoryFilter.toLowerCase() === cat.toLowerCase();
+        return `
+          <button type="button" class="category-filter-chip feature-badge ${isCatActive ? 'active' : ''}"
+                  style="background:${isCatActive ? 'var(--green)' : 'rgba(52, 211, 153, 0.15)'}; color:${isCatActive ? '#000' : 'var(--green)'}; border:1px solid rgba(52, 211, 153, 0.3);"
+                  onclick="filterCardsByCategory('${esc(cat)}')">
+            ${esc(cat)}: ₹${amt.toLocaleString('en-IN')}
+          </button>
+        `;
+      }).join('') : '<span class="muted" style="font-size:12px;">No receipt breakdowns yet.</span>';
 
-    // 2. Fetch cards
-    const url = kindFilter ? `/api/cards?kind=${encodeURIComponent(kindFilter)}` : '/api/cards';
-    const cards = await fetchJson(url, {}, 'Failed to load cards');
-    if (cards.length === 0) {
-      statusEl.textContent = 'No smart cards created yet. Click "Auto-Format Notes into Cards" below!';
-      listEl.innerHTML = '';
-      return;
-    }
-    statusEl.textContent = `Displaying ${cards.length} structured cards:`;
-    listEl.innerHTML = cards.map(c => {
-      const k = c.kind || 'card';
-      const f = c.kind_fields || {};
-      let bodyHtml = '';
-      if (k === 'recipe') {
-        const ings = Array.isArray(f.ingredients) ? f.ingredients.slice(0, 4).join(', ') : (f.ingredients || '');
-        bodyHtml = `
-          <div class="typed-card-fields">
-            <div class="typed-card-field"><dt>Prep time:</dt><dd>${esc(f.prep_time || 'N/A')}</dd></div>
-            <div class="typed-card-field"><dt>Ingredients:</dt><dd>${esc(ings)}</dd></div>
-          </div>
+      if (currentCardCategoryFilter) {
+        categoryBreakdownEl.innerHTML += `
+          <button type="button" class="category-filter-chip feature-badge" style="background:rgba(239, 68, 68, 0.15); color:var(--red); border:1px solid rgba(239, 68, 68, 0.3);" onclick="filterCardsByCategory('')">
+            ✕ Clear Category Filter
+          </button>
         `;
-      } else if (k === 'book') {
-        bodyHtml = `
-          <div class="typed-card-fields">
-            <div class="typed-card-field"><dt>Author:</dt><dd>${esc(f.author || 'Unknown')}</dd></div>
-            <div class="typed-card-field"><dt>Genre:</dt><dd>${esc(f.genre || 'General')}</dd></div>
-            <div class="typed-card-field"><dt>Status:</dt><dd>${esc(f.status || 'To Read')}</dd></div>
-          </div>
-        `;
-      } else if (k === 'receipt') {
-        bodyHtml = `
-          <div class="typed-card-fields">
-            <div class="typed-card-field"><dt>Amount:</dt><dd><strong style="color:var(--green); font-size:1.15rem;">₹${esc(String(f.amount || '0'))}</strong></dd></div>
-            <div class="typed-card-field"><dt>Category:</dt><dd>${esc(f.category || 'General')}</dd></div>
-            <div class="typed-card-field"><dt>Date:</dt><dd>${esc(f.date || 'Recent')}</dd></div>
-          </div>
-        `;
-      } else if (k === 'contact') {
-        bodyHtml = `
-          <div class="typed-card-fields">
-            <div class="typed-card-field"><dt>Role/Org:</dt><dd>${esc(f.role || f.company || 'Contact')}</dd></div>
-            <div class="typed-card-field"><dt>Contact:</dt><dd>${esc(f.phone || f.email || 'N/A')}</dd></div>
-          </div>
-        `;
-      } else {
-        bodyHtml = `<div class="muted" style="font-size:13px;">${esc(c.raw_text?.slice(0, 160) || '')}</div>`;
       }
+    }
 
-      return `
-        <div class="typed-card">
-          <span class="typed-card-badge ${k}">${k}</span>
-          <div class="typed-card-title">${esc(f.title || f.name || f.vendor || c.title || 'Untitled Card')}</div>
-          ${bodyHtml}
-          <div class="mono" style="font-size:11px; color:var(--muted); margin-top:auto;">Note #${c.id} · ${c.created_at}</div>
-        </div>
-      `;
-    }).join('');
+    // 2. Fetch all cards once to cache and compute counts
+    const cards = await fetchJson('/api/cards', {}, 'Failed to load cards');
+    allCardsCache = cards;
+
+    // Update counts on filter buttons
+    const counts = { all: cards.length, receipt: 0, recipe: 0, book: 0, contact: 0, event: 0 };
+    for (const c of cards) {
+      if (counts[c.kind] !== undefined) counts[c.kind]++;
+    }
+    const updateCount = (id, n) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = `(${n})`;
+    };
+    updateCount('count-cards-all', counts.all);
+    updateCount('count-cards-receipt', counts.receipt);
+    updateCount('count-cards-recipe', counts.recipe);
+    updateCount('count-cards-book', counts.book);
+    updateCount('count-cards-contact', counts.contact);
+    updateCount('count-cards-event', counts.event);
+
+    filterAndRenderCards();
   } catch (err) {
-    statusEl.textContent = 'Failed to load cards.';
+    if (statusEl) statusEl.textContent = 'Failed to load cards.';
   }
 }
 
+function filterAndRenderCards() {
+  const statusEl = document.getElementById('cardsStatus');
+  const listEl = document.getElementById('cardsList');
+  if (!listEl) return;
+
+  let filtered = allCardsCache.slice();
+
+  // Filter by kind
+  if (currentCardKindFilter) {
+    filtered = filtered.filter(c => c.kind === currentCardKindFilter);
+  }
+
+  // Filter by category (for receipts)
+  if (currentCardCategoryFilter) {
+    filtered = filtered.filter(c => {
+      if (c.kind !== 'receipt') return false;
+      const cat = (c.kind_fields?.category || '').toLowerCase();
+      return cat === currentCardCategoryFilter.toLowerCase();
+    });
+  }
+
+  // Filter by search query
+  if (currentCardSearchQuery) {
+    const q = currentCardSearchQuery.toLowerCase();
+    filtered = filtered.filter(c => {
+      const f = c.kind_fields || {};
+      const target = [
+        c.title,
+        c.raw_text,
+        f.title,
+        f.name,
+        f.vendor,
+        f.category,
+        f.author,
+        f.genre,
+        f.company,
+        f.role,
+        f.venue,
+        f.location,
+        Array.isArray(f.ingredients) ? f.ingredients.join(' ') : f.ingredients,
+        f.phone,
+        f.email
+      ].filter(Boolean).join(' ').toLowerCase();
+      return target.includes(q);
+    });
+  }
+
+  // Sort
+  if (currentCardSort === 'newest') {
+    filtered.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+  } else if (currentCardSort === 'oldest') {
+    filtered.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+  } else if (currentCardSort === 'amount-high') {
+    filtered.sort((a, b) => (Number(b.kind_fields?.amount || 0)) - (Number(a.kind_fields?.amount || 0)));
+  } else if (currentCardSort === 'amount-low') {
+    filtered.sort((a, b) => (Number(a.kind_fields?.amount || 0)) - (Number(b.kind_fields?.amount || 0)));
+  } else if (currentCardSort === 'alpha') {
+    filtered.sort((a, b) => {
+      const nameA = (a.kind_fields?.name || a.kind_fields?.title || a.kind_fields?.vendor || a.title || '').toLowerCase();
+      const nameB = (b.kind_fields?.name || b.kind_fields?.title || b.kind_fields?.vendor || b.title || '').toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+  }
+
+  // Render status
+  if (filtered.length === 0) {
+    statusEl.textContent = allCardsCache.length === 0
+      ? 'No smart cards created yet. Click "Auto-Format Notes into Cards" or "+ New Smart Card"!'
+      : 'No smart cards match your current search/filters.';
+    listEl.innerHTML = '';
+    return;
+  }
+
+  const kindLabel = currentCardKindFilter ? ` · Kind: ${currentCardKindFilter}` : '';
+  const catLabel = currentCardCategoryFilter ? ` · Category: "${currentCardCategoryFilter}"` : '';
+  const searchLabel = currentCardSearchQuery ? ` · Search: "${currentCardSearchQuery}"` : '';
+  statusEl.textContent = `Displaying ${filtered.length} of ${allCardsCache.length} smart cards${kindLabel}${catLabel}${searchLabel}:`;
+
+  listEl.innerHTML = filtered.map(c => {
+    const k = c.kind || 'card';
+    const f = c.kind_fields || {};
+    let bodyHtml = '';
+    let actionHtml = '';
+
+    if (k === 'recipe') {
+      const prep = f.prep_time || '30 mins';
+      const servings = f.servings || '4';
+      let ings = f.ingredients || [];
+      if (typeof ings === 'string') ings = ings.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+      const previewIngs = Array.isArray(ings) ? ings.slice(0, 4) : [];
+      const remainingCount = ings.length - previewIngs.length;
+
+      bodyHtml = `
+        <div style="display:flex; gap:8px; margin:6px 0 10px 0;">
+          <span class="feature-badge" style="background:rgba(245, 158, 11, 0.15); color:var(--amber);">⏱️ ${esc(prep)}</span>
+          <span class="feature-badge" style="background:rgba(99, 102, 241, 0.12); color:var(--indigo-text);">🍽️ ${esc(String(servings))} servings</span>
+        </div>
+        <div class="mono" style="font-size:11px; color:var(--muted); text-transform:uppercase; margin-bottom:4px;">Ingredients:</div>
+        <div style="display:flex; flex-direction:column; gap:2px; margin-bottom:6px;">
+          ${previewIngs.map(ing => `
+            <label class="ingredient-check-item">
+              <input type="checkbox" onchange="this.parentElement.style.opacity = this.checked ? '0.5' : '1'; this.nextElementSibling.style.textDecoration = this.checked ? 'line-through' : 'none';">
+              <span>${esc(ing)}</span>
+            </label>
+          `).join('')}
+          ${remainingCount > 0 ? `<span class="muted" style="font-size:11px; margin-top:2px;">+ ${remainingCount} more in cook mode</span>` : ''}
+        </div>
+      `;
+      actionHtml = `
+        <div class="card-action-bar">
+          <button type="button" class="card-action-btn" onclick="openRecipeCookMode(${c.id})">🍳 Cook Mode & Timer</button>
+        </div>
+      `;
+    } else if (k === 'book') {
+      const author = f.author || 'Unknown Author';
+      const genre = f.genre || 'General';
+      const status = f.status || 'To Read';
+      const isFinished = status.toLowerCase().includes('finish');
+      const isReading = status.toLowerCase().includes('reading');
+      const statusPill = isFinished ? '✅ Finished' : isReading ? '📖 Reading' : '🔖 To Read';
+
+      bodyHtml = `
+        <div class="typed-card-fields" style="margin-top:8px;">
+          <div class="typed-card-field"><dt>Author:</dt><dd><strong>${esc(author)}</strong></dd></div>
+          <div class="typed-card-field"><dt>Genre:</dt><dd>${esc(genre)}</dd></div>
+          <div class="typed-card-field"><dt>Reading Status:</dt><dd><span class="feature-badge" style="background:rgba(99, 102, 241, 0.15); color:var(--indigo-text);">${statusPill}</span></dd></div>
+        </div>
+      `;
+      actionHtml = `
+        <div class="card-action-bar">
+          <button type="button" class="card-action-btn" onclick="cycleBookStatus(${c.id}, event)" title="Click to cycle status: To Read → Reading → Finished">
+            🔄 Switch: ${isFinished ? 'Set To Read' : isReading ? 'Mark Finished' : 'Start Reading'}
+          </button>
+        </div>
+      `;
+    } else if (k === 'receipt') {
+      const amt = Number(f.amount || 0);
+      const cat = f.category || 'General';
+      const date = f.date || (c.created_at || '').slice(0, 10);
+      const reimbursed = Boolean(f.reimbursed);
+
+      bodyHtml = `
+        <div class="card-hero-amount">₹${amt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+          <span class="card-category-badge">${esc(cat)}</span>
+          <span class="mono muted" style="font-size:12px;">${esc(date)}</span>
+        </div>
+      `;
+      actionHtml = `
+        <div class="card-action-bar">
+          <button type="button" class="reimbursed-toggle-btn ${reimbursed ? 'is-reimbursed' : ''}" onclick="toggleCardReimbursed(${c.id}, event)" title="Click to toggle expense reimbursement status">
+            ${reimbursed ? '✅ Reimbursed' : '⏳ Mark Reimbursed'}
+          </button>
+          <button type="button" class="card-action-btn" onclick="copyExpenseSnippet(${c.id}, event)" title="Copy expense row">
+            📋 Copy Details
+          </button>
+        </div>
+      `;
+    } else if (k === 'contact') {
+      const name = f.name || c.title || 'Contact';
+      const role = f.role || f.company || 'Contact';
+      const phone = f.phone || '';
+      const email = f.email || '';
+      const cleanPhone = phone.replace(/[^\d+]/g, '');
+
+      bodyHtml = `
+        <div class="typed-card-fields" style="margin-top:8px;">
+          <div class="typed-card-field"><dt>Organization/Role:</dt><dd><strong>${esc(role)}</strong></dd></div>
+          ${phone ? `<div class="typed-card-field"><dt>Phone:</dt><dd><a href="tel:${cleanPhone}" style="color:var(--cyan);">${esc(phone)}</a></dd></div>` : ''}
+          ${email ? `<div class="typed-card-field"><dt>Email:</dt><dd><a href="mailto:${esc(email)}" style="color:var(--indigo-text);">${esc(email)}</a></dd></div>` : ''}
+        </div>
+      `;
+      actionHtml = `
+        <div class="card-action-bar">
+          ${cleanPhone ? `<a href="tel:${cleanPhone}" class="card-action-btn">📞 Call</a>` : ''}
+          ${cleanPhone ? `<a href="https://wa.me/${cleanPhone.replace('+', '')}" target="_blank" class="card-action-btn whatsapp-btn">💬 WhatsApp</a>` : ''}
+          ${email ? `<a href="mailto:${esc(email)}" class="card-action-btn">✉️ Email</a>` : ''}
+          <button type="button" class="card-action-btn dossier-link-btn" onclick="openContactInTreemap('${esc(name)}')">👤 View Treemap</button>
+        </div>
+      `;
+    } else if (k === 'event') {
+      const dt = f.date_time || f.date || 'Scheduled Event';
+      const venue = f.venue || f.location || 'Local / Specified in notes';
+
+      bodyHtml = `
+        <div class="typed-card-fields" style="margin-top:8px;">
+          <div class="typed-card-field"><dt>Date & Time:</dt><dd><strong>${esc(dt)}</strong></dd></div>
+          <div class="typed-card-field"><dt>Location:</dt><dd>${esc(venue)}</dd></div>
+        </div>
+      `;
+      actionHtml = `
+        <div class="card-action-bar">
+          <button type="button" class="card-action-btn" onclick="downloadEventIcs(${c.id})">📅 Add to Calendar (.ics)</button>
+          <a href="https://maps.google.com/?q=${encodeURIComponent(venue)}" target="_blank" class="card-action-btn">🗺️ Maps</a>
+        </div>
+      `;
+    } else {
+      bodyHtml = `<div class="muted" style="font-size:13px; margin-top:8px; line-height:1.5;">${esc(c.raw_text?.slice(0, 160) || '')}</div>`;
+    }
+
+    return `
+      <div class="typed-card">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+          <span class="typed-card-badge ${k}">${k.toUpperCase()}</span>
+          <span class="mono muted" style="font-size:10.5px;">#${c.id}</span>
+        </div>
+        <div class="typed-card-title" style="margin-top:6px;">${esc(f.title || f.name || f.vendor || f.event_name || c.title || 'Untitled Card')}</div>
+        ${bodyHtml}
+        ${actionHtml}
+      </div>
+    `;
+  }).join('');
+}
+
 function filterCardsByKind(kind) {
+  currentCardKindFilter = kind;
   document.querySelectorAll('#panel-cards .feature-bar .chip').forEach(btn => {
-    btn.classList.toggle('active', btn.textContent.toLowerCase().includes(kind) || (!kind && btn.textContent === 'All'));
+    const isTarget = (!kind && btn.id === 'chip-cards-all') || (kind && btn.id === `chip-cards-${kind}`);
+    btn.classList.toggle('active', isTarget);
   });
-  loadCards(kind);
+  filterAndRenderCards();
+}
+
+function filterCardsByCategory(cat) {
+  currentCardCategoryFilter = (currentCardCategoryFilter.toLowerCase() === cat.toLowerCase()) ? '' : cat;
+  if (currentCardCategoryFilter && currentCardKindFilter !== 'receipt') {
+    filterCardsByKind('receipt');
+  } else {
+    filterAndRenderCards();
+  }
+}
+
+function onCardsSearchInput(val) {
+  currentCardSearchQuery = val.trim();
+  filterAndRenderCards();
+}
+
+function onCardsSortChange(val) {
+  currentCardSort = val;
+  filterAndRenderCards();
+}
+
+async function toggleCardReimbursed(itemId, evt) {
+  if (evt) evt.stopPropagation();
+  const card = allCardsCache.find(c => c.id === itemId);
+  if (!card) return;
+  card.kind_fields = card.kind_fields || {};
+  card.kind_fields.reimbursed = !card.kind_fields.reimbursed;
+  filterAndRenderCards();
+
+  try {
+    await fetchJson(`/api/items/${itemId}/card`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'receipt', fields: card.kind_fields })
+    });
+  } catch (e) {
+    console.error('Failed to save reimbursed state', e);
+  }
+}
+
+async function cycleBookStatus(itemId, evt) {
+  if (evt) evt.stopPropagation();
+  const card = allCardsCache.find(c => c.id === itemId);
+  if (!card) return;
+  card.kind_fields = card.kind_fields || {};
+  const cur = (card.kind_fields.status || '').toLowerCase();
+  let next = 'Reading';
+  if (cur.includes('read') && !cur.includes('finished')) {
+    next = 'Finished';
+  } else if (cur.includes('finish')) {
+    next = 'To Read';
+  } else {
+    next = 'Reading';
+  }
+  card.kind_fields.status = next;
+  filterAndRenderCards();
+
+  try {
+    await fetchJson(`/api/items/${itemId}/card`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'book', fields: card.kind_fields })
+    });
+  } catch (e) {
+    console.error('Failed to update book status', e);
+  }
+}
+
+function copyExpenseSnippet(itemId, evt) {
+  if (evt) evt.stopPropagation();
+  const card = allCardsCache.find(c => c.id === itemId);
+  if (!card) return;
+  const f = card.kind_fields || {};
+  const vendor = f.vendor || card.title || 'Expense';
+  const amt = Number(f.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+  const cat = f.category || 'General';
+  const date = f.date || (card.created_at || '').slice(0, 10);
+  const snippet = `${vendor} - ₹${amt} (${cat} · ${date})`;
+
+  navigator.clipboard.writeText(snippet).then(() => {
+    if (evt && evt.target) {
+      const orig = evt.target.innerHTML;
+      evt.target.innerHTML = '✓ Copied!';
+      setTimeout(() => { evt.target.innerHTML = orig; }, 1500);
+    }
+  });
+}
+
+function downloadEventIcs(itemId) {
+  const card = allCardsCache.find(c => c.id === itemId);
+  if (!card) return;
+  const f = card.kind_fields || {};
+  const title = f.name || f.event_name || card.title || 'Life Inbox Event';
+  const venue = f.venue || f.location || 'Online / Specified in note';
+  const rawDate = f.date || f.date_time || '';
+
+  let dtStartStr = '20261120T100000Z';
+  let dtEndStr = '20261120T110000Z';
+  if (rawDate) {
+    const dMatch = rawDate.match(/(\d{4})[-/](\d{2})[-/](\d{2})/);
+    if (dMatch) {
+      const yr = dMatch[1], mo = dMatch[2], da = dMatch[3];
+      dtStartStr = `${yr}${mo}${da}T100000Z`;
+      dtEndStr = `${yr}${mo}${da}T110000Z`;
+    }
+  }
+
+  const icsContent = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Life Inbox//Smart Cards//EN',
+    'BEGIN:VEVENT',
+    `UID:life-inbox-event-${card.id}@lifeinbox.app`,
+    `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
+    `DTSTART:${dtStartStr}`,
+    `DTEND:${dtEndStr}`,
+    `SUMMARY:${title.replace(/[\r\n]+/g, ' ')}`,
+    `LOCATION:${venue.replace(/[\r\n]+/g, ' ')}`,
+    `DESCRIPTION:Exported from Life Inbox item #${card.id}`,
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ].join('\r\n');
+
+  const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportExpensesToCsv() {
+  const receipts = allCardsCache.filter(c => c.kind === 'receipt');
+  if (receipts.length === 0) {
+    alert('No receipts found to export.');
+    return;
+  }
+
+  const rows = [
+    ['Item ID', 'Date', 'Vendor / Description', 'Category', 'Amount (INR)', 'Status']
+  ];
+
+  for (const r of receipts) {
+    const f = r.kind_fields || {};
+    const vendor = f.vendor || r.title || 'Receipt';
+    const amount = Number(f.amount || 0).toFixed(2);
+    const date = f.date || (r.created_at || '').slice(0, 10);
+    const cat = f.category || 'General';
+    const status = f.reimbursed ? 'Reimbursed' : 'Pending';
+    rows.push([r.id, date, `"${vendor.replace(/"/g, '""')}"`, `"${cat.replace(/"/g, '""')}"`, amount, status]);
+  }
+
+  const csvContent = rows.map(r => r.join(',')).join('\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `life_inbox_expenses_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function openContactInTreemap(name) {
+  const tabBtn = document.getElementById('tab-entities');
+  if (tabBtn) tabBtn.click();
+
+  if (!allEntitiesCache || allEntitiesCache.length === 0) {
+    await loadEntities();
+  }
+
+  const clean = name.toLowerCase().trim();
+  let match = (allEntitiesCache || []).find(e => e.name.toLowerCase() === clean);
+  if (!match) {
+    match = (allEntitiesCache || []).find(e => e.name.toLowerCase().includes(clean) || clean.includes(e.name.toLowerCase()));
+  }
+
+  if (match) {
+    showDossier(match.id);
+  } else {
+    try {
+      const results = await fetchJson(`/api/entities?q=${encodeURIComponent(name)}`);
+      if (results && results.length > 0) {
+        showDossier(results[0].id);
+      }
+    } catch(e) {}
+  }
+}
+
+// Recipe Cook Mode
+function openRecipeCookMode(itemId) {
+  const card = allCardsCache.find(c => c.id === itemId);
+  if (!card) return;
+  const f = card.kind_fields || {};
+  const modal = document.getElementById('recipeCookModal');
+  const titleEl = document.getElementById('cookRecipeTitle');
+  const metaEl = document.getElementById('cookRecipeMeta');
+  const ingListEl = document.getElementById('cookIngredientsList');
+  const stepsListEl = document.getElementById('cookStepsList');
+  if (!modal) return;
+
+  titleEl.textContent = f.title || f.name || card.title || 'Recipe';
+  metaEl.textContent = `Prep Time: ${f.prep_time || '25-35 mins'} · Servings: ${f.servings || '4'}`;
+
+  let ings = f.ingredients || [];
+  if (typeof ings === 'string') ings = ings.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+  if (!Array.isArray(ings) || ings.length === 0) {
+    ings = ['Ingredients listed in notes'];
+  }
+  ingListEl.innerHTML = ings.map(ing => `
+    <label class="ingredient-check-item">
+      <input type="checkbox" onchange="this.parentElement.style.opacity = this.checked ? '0.5' : '1'; this.nextElementSibling.style.textDecoration = this.checked ? 'line-through' : 'none';">
+      <span>${esc(ing)}</span>
+    </label>
+  `).join('');
+
+  let steps = f.steps || [];
+  if (typeof steps === 'string') steps = steps.split(/\n+/).map(s => s.trim()).filter(Boolean);
+  if (!Array.isArray(steps) || steps.length === 0) {
+    const raw = card.raw_text || '';
+    const sentences = raw.split(/[.\n]+/).map(s => s.trim()).filter(s => s.length > 10);
+    steps = sentences.length > 0 ? sentences.slice(0, 6) : ['Follow instructions from note.'];
+  }
+  stepsListEl.innerHTML = steps.map((st, i) => `
+    <div class="cook-step-item">
+      <span class="cook-step-no">${i + 1}.</span>
+      <span>${esc(st)}</span>
+    </div>
+  `).join('');
+
+  modal.hidden = false;
+  resetCookTimer();
+}
+
+function closeRecipeCookMode() {
+  const modal = document.getElementById('recipeCookModal');
+  if (modal) modal.hidden = true;
+  resetCookTimer();
+}
+
+function setCookTimer(seconds) {
+  cookTimerSeconds = seconds;
+  updateCookTimerDisplay();
+}
+
+function toggleCookTimer() {
+  const btn = document.getElementById('cookTimerToggleBtn');
+  if (cookTimerInterval) {
+    clearInterval(cookTimerInterval);
+    cookTimerInterval = null;
+    if (btn) btn.textContent = 'Resume';
+  } else {
+    if (cookTimerSeconds <= 0) cookTimerSeconds = 300;
+    updateCookTimerDisplay();
+    if (btn) btn.textContent = 'Pause';
+    cookTimerInterval = setInterval(() => {
+      cookTimerSeconds--;
+      if (cookTimerSeconds <= 0) {
+        clearInterval(cookTimerInterval);
+        cookTimerInterval = null;
+        if (btn) btn.textContent = 'Start';
+        cookTimerSeconds = 0;
+        updateCookTimerDisplay();
+        alert('🔔 Kitchen Timer: Recipe step complete!');
+      } else {
+        updateCookTimerDisplay();
+      }
+    }, 1000);
+  }
+}
+
+function resetCookTimer() {
+  if (cookTimerInterval) {
+    clearInterval(cookTimerInterval);
+    cookTimerInterval = null;
+  }
+  cookTimerSeconds = 0;
+  updateCookTimerDisplay();
+  const btn = document.getElementById('cookTimerToggleBtn');
+  if (btn) btn.textContent = 'Start';
+}
+
+function updateCookTimerDisplay() {
+  const display = document.getElementById('cookTimerDisplay');
+  if (!display) return;
+  const m = Math.floor(cookTimerSeconds / 60);
+  const s = cookTimerSeconds % 60;
+  display.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+// Modal: Create New Smart Card
+function openNewCardModal() {
+  const modal = document.getElementById('newCardModal');
+  if (modal) {
+    modal.hidden = false;
+    const kindSelect = document.getElementById('newCardKindSelect');
+    if (kindSelect) onNewCardKindChange(kindSelect.value || 'receipt');
+  }
+}
+
+function closeNewCardModal() {
+  const modal = document.getElementById('newCardModal');
+  if (modal) modal.hidden = true;
+}
+
+function onNewCardKindChange(kind) {
+  const container = document.getElementById('newCardDynamicFields');
+  if (!container) return;
+  if (kind === 'receipt') {
+    container.innerHTML = `
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        <label style="flex:1 1 180px;">
+          Amount (₹)
+          <input type="number" id="field_receipt_amount" step="0.01" min="0" required placeholder="1450.00" style="width:100%; margin-top:4px;">
+        </label>
+        <label style="flex:1 1 180px;">
+          Category
+          <select id="field_receipt_category" style="width:100%; margin-top:4px;">
+            <option value="Healthcare & Pharmacy">Healthcare & Pharmacy</option>
+            <option value="Food & Dining">Food & Dining</option>
+            <option value="Groceries & Supermarket">Groceries & Supermarket</option>
+            <option value="Travel & Commute">Travel & Commute</option>
+            <option value="Utilities & Bills">Utilities & Bills</option>
+            <option value="Electronics & Tech">Electronics & Tech</option>
+            <option value="General">General</option>
+          </select>
+        </label>
+        <label style="flex:1 1 180px;">
+          Date
+          <input type="date" id="field_receipt_date" value="${new Date().toISOString().slice(0, 10)}" style="width:100%; margin-top:4px;">
+        </label>
+      </div>
+    `;
+  } else if (kind === 'recipe') {
+    container.innerHTML = `
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        <label style="flex:1 1 180px;">
+          Prep Time
+          <input type="text" id="field_recipe_prep" placeholder="e.g. 25 mins" style="width:100%; margin-top:4px;">
+        </label>
+        <label style="flex:1 1 180px;">
+          Servings
+          <input type="number" id="field_recipe_servings" value="4" min="1" style="width:100%; margin-top:4px;">
+        </label>
+      </div>
+      <label>
+        Ingredients (comma-separated or one per line)
+        <textarea id="field_recipe_ingredients" rows="3" placeholder="200g paneer, butter, tomato puree, kasuri methi..." style="width:100%; margin-top:4px;"></textarea>
+      </label>
+      <label>
+        Cooking Steps (one per line)
+        <textarea id="field_recipe_steps" rows="3" placeholder="1. Heat pan and melt butter\n2. Sauté spices and puree\n3. Add paneer cubes and simmer" style="width:100%; margin-top:4px;"></textarea>
+      </label>
+    `;
+  } else if (kind === 'contact') {
+    container.innerHTML = `
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        <label style="flex:1 1 180px;">
+          Phone Number
+          <input type="tel" id="field_contact_phone" placeholder="+91 98765 43210" style="width:100%; margin-top:4px;">
+        </label>
+        <label style="flex:1 1 180px;">
+          Email
+          <input type="email" id="field_contact_email" placeholder="contact@example.com" style="width:100%; margin-top:4px;">
+        </label>
+      </div>
+      <label>
+        Company / Role
+        <input type="text" id="field_contact_company" placeholder="e.g. Cardiologist at AIIMS, Plumbing Specialist..." style="width:100%; margin-top:4px;">
+      </label>
+    `;
+  } else if (kind === 'book') {
+    container.innerHTML = `
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        <label style="flex:1 1 180px;">
+          Author
+          <input type="text" id="field_book_author" placeholder="e.g. James Clear" style="width:100%; margin-top:4px;">
+        </label>
+        <label style="flex:1 1 180px;">
+          Genre
+          <input type="text" id="field_book_genre" placeholder="e.g. Productivity, Sci-Fi" style="width:100%; margin-top:4px;">
+        </label>
+        <label style="flex:1 1 180px;">
+          Status
+          <select id="field_book_status" style="width:100%; margin-top:4px;">
+            <option value="To Read">To Read</option>
+            <option value="Reading">Currently Reading</option>
+            <option value="Finished">Finished</option>
+          </select>
+        </label>
+      </div>
+    `;
+  } else if (kind === 'event') {
+    container.innerHTML = `
+      <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        <label style="flex:1 1 200px;">
+          Date & Time
+          <input type="text" id="field_event_date" placeholder="e.g. 2026-11-20 10:00 AM" style="width:100%; margin-top:4px;">
+        </label>
+        <label style="flex:1 1 200px;">
+          Venue / Location
+          <input type="text" id="field_event_venue" placeholder="e.g. Bangalore Palace Ground" style="width:100%; margin-top:4px;">
+        </label>
+      </div>
+    `;
+  }
+}
+
+async function submitNewSmartCard(e) {
+  e.preventDefault();
+  const kind = document.getElementById('newCardKindSelect').value;
+  const title = document.getElementById('newCardTitleInput').value.trim();
+  const fields = {};
+
+  if (kind === 'receipt') {
+    fields.vendor = title;
+    fields.amount = parseFloat(document.getElementById('field_receipt_amount')?.value || '0');
+    fields.category = document.getElementById('field_receipt_category')?.value || 'General';
+    fields.date = document.getElementById('field_receipt_date')?.value || new Date().toISOString().slice(0, 10);
+    fields.reimbursed = false;
+  } else if (kind === 'recipe') {
+    fields.title = title;
+    fields.prep_time = document.getElementById('field_recipe_prep')?.value || '30 mins';
+    fields.servings = parseInt(document.getElementById('field_recipe_servings')?.value || '4', 10);
+    const rawIngs = document.getElementById('field_recipe_ingredients')?.value || '';
+    fields.ingredients = rawIngs.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+    const rawSteps = document.getElementById('field_recipe_steps')?.value || '';
+    fields.steps = rawSteps.split(/\n+/).map(s => s.trim()).filter(Boolean);
+  } else if (kind === 'contact') {
+    fields.name = title;
+    fields.phone = document.getElementById('field_contact_phone')?.value || '';
+    fields.email = document.getElementById('field_contact_email')?.value || '';
+    fields.company = document.getElementById('field_contact_company')?.value || '';
+  } else if (kind === 'book') {
+    fields.title = title;
+    fields.author = document.getElementById('field_book_author')?.value || 'Unknown';
+    fields.genre = document.getElementById('field_book_genre')?.value || 'General';
+    fields.status = document.getElementById('field_book_status')?.value || 'To Read';
+  } else if (kind === 'event') {
+    fields.name = title;
+    fields.event_name = title;
+    fields.date = document.getElementById('field_event_date')?.value || '';
+    fields.date_time = document.getElementById('field_event_date')?.value || '';
+    fields.venue = document.getElementById('field_event_venue')?.value || '';
+  }
+
+  try {
+    await fetchJson('/api/cards', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, title, fields })
+    }, 'Failed to create card');
+
+    closeNewCardModal();
+    filterCardsByKind(kind);
+    await loadCards(kind);
+  } catch (err) {
+    alert('Error creating smart card: ' + err.message);
+  }
 }
 
 async function convertAllNotesToCards() {

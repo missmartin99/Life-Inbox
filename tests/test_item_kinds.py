@@ -177,3 +177,54 @@ def test_list_cards_by_kind(client):
 
 def test_card_for_missing_item_is_404(client):
     assert client.post("/api/items/999/card").status_code == 404
+
+
+def test_update_card_fields_and_toggle_reimbursed(client):
+    created = client.post(
+        "/api/cards",
+        json={
+            "kind": "receipt",
+            "title": "Apollo Medicines",
+            "fields": {"vendor": "Apollo Medicines", "amount": 850.0, "category": "Healthcare & Pharmacy", "reimbursed": False},
+        },
+    ).json()
+
+    assert created["kind"] == "receipt"
+    assert created["kind_fields"]["amount"] == 850.0
+    assert created["kind_fields"]["reimbursed"] is False
+
+    # Toggle reimbursed
+    updated = client.put(
+        f"/api/items/{created['id']}/card",
+        json={
+            "kind": "receipt",
+            "fields": {"vendor": "Apollo Medicines", "amount": 850.0, "category": "Healthcare & Pharmacy", "reimbursed": True},
+        },
+    ).json()
+
+    assert updated["kind_fields"]["reimbursed"] is True
+
+
+def test_create_card_directly_with_recipe(client):
+    resp = client.post(
+        "/api/cards",
+        json={
+            "kind": "recipe",
+            "title": "Paneer Butter Masala",
+            "fields": {"title": "Paneer Butter Masala", "prep_time": "30 mins", "ingredients": ["paneer", "butter"]},
+        },
+    )
+    assert resp.status_code == 200
+    card = resp.json()
+    assert card["kind"] == "recipe"
+    assert card["kind_fields"]["prep_time"] == "30 mins"
+    assert "paneer" in card["kind_fields"]["ingredients"]
+
+
+def test_update_card_invalid_kind_is_400(client):
+    resp = client.post(
+        "/api/cards",
+        json={"kind": "invalid_kind", "title": "Nope", "fields": {}},
+    )
+    assert resp.status_code == 400
+

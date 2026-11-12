@@ -136,6 +136,8 @@ from app.schemas import (
     PersistedAnalysis,
     Priority,
     SearchHit,
+    SmartCardCreate,
+    SmartCardUpdate,
     Task,
     TaskListStatus,
     TaskReminderRequest,
@@ -1216,6 +1218,38 @@ def create_item_card(item_id: int):
 
     card = make_card(text, is_sensitive=item["is_sensitive"])
     return save_item_card(item_id, card["kind"], card["fields"])
+
+
+@app.put("/api/items/{item_id}/card", response_model=InboxItem)
+def update_item_card(item_id: int, payload: SmartCardUpdate):
+    """Manually update or patch a card's kind and fields."""
+    if payload.kind not in KIND_FIELDS and payload.kind != "other":
+        raise HTTPException(status_code=400, detail="Unknown kind")
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    updated = save_item_card(item_id, payload.kind, payload.fields)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return updated
+
+
+@app.post("/api/cards", response_model=InboxItem)
+def create_card_directly(payload: SmartCardCreate):
+    """Create a new item and smart card directly."""
+    if payload.kind not in KIND_FIELDS and payload.kind != "other":
+        raise HTTPException(status_code=400, detail="Unknown kind")
+    title = payload.title or payload.fields.get("name") or payload.fields.get("title") or payload.fields.get("vendor") or f"{payload.kind.title()} Note"
+    raw_lines = [f"**{title}** ({payload.kind})"]
+    for k, v in payload.fields.items():
+        if isinstance(v, list):
+            raw_lines.append(f"{k.capitalize()}: {', '.join(str(x) for x in v)}")
+        else:
+            raw_lines.append(f"{k.capitalize()}: {v}")
+    raw_text = "\n".join(raw_lines)
+    item = add_item_to_db(raw_text)
+    updated = save_item_card(item["id"], payload.kind, payload.fields)
+    return updated
 
 
 @app.get("/api/cards", response_model=List[InboxItem])
