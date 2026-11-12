@@ -21,6 +21,7 @@ from app.capture.url_fetch import fetch_url, validate_public_http_url
 from app.capture.voice_extract import process_voice_bytes, validate_audio_upload
 from app.privacy import redact
 from app.item_kinds import KIND_FIELDS, make_card
+from app.expenses import expense_summary
 from app.database import (
     list_items_by_kind,
     save_item_card,
@@ -1081,6 +1082,19 @@ def list_cards(kind: Optional[str] = Query(None)):
 def list_card_kinds():
     """The kinds we recognise and the fields each one has."""
     return KIND_FIELDS
+
+
+# --- Expenses (receipts) ---------------------------------------------------
+
+
+@app.get("/api/expenses")
+def get_expenses(month: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$")):
+    """Totals from receipt cards, per month and per category.
+
+    Pass ?month=2026-11 for one month. Make receipts with
+    POST /api/items/{id}/card on a photo or note of a bill.
+    """
+    return expense_summary(list_items_by_kind("receipt"), month=month)
 
 
 # --- Privacy --------------------------------------------------------------

@@ -171,6 +171,19 @@ add one entry to `KIND_FIELDS`.
 - `GET /api/cards?kind=recipe` lists items that have a card;
 - `GET /api/cards/kinds` lists every kind and its fields.
 
+### Receipts and expenses
+
+`receipt` is a smart-template kind with `vendor`, `amount`, `date` and
+`category`. Make a card from a photo of a bill (its OCR text is used) or a
+typed note with `POST /api/items/{id}/card`. Without AI, the amount and date
+are found with simple patterns (`₹1,250`, `Rs. 300`, `05/11/2026`).
+
+- `GET /api/expenses` returns the total, totals per month and per category,
+  and the list of receipts;
+- `GET /api/expenses?month=2026-11` limits it to one month.
+
+Receipts need no extra table: their fields live in `inbox_items.kind_fields`.
+
 ## 4. Optional: configure OpenAI
 
 If you want AI analysis instead of the local fallback, set your API key in the

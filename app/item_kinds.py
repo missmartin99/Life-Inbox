@@ -19,18 +19,20 @@ import json
 import logging
 import re
 
+from app.expenses import CATEGORIES, find_amount, find_date
 from app.organizer import extract_json_object
 from app.privacy import ai_is_configured, ask_ai
 
 logger = logging.getLogger(__name__)
 
 # Each kind and its fields. "list" fields hold several short strings,
-# "text" fields hold one string.
+# "text" fields hold one string, "number" fields hold a number.
 KIND_FIELDS = {
     "recipe": {"name": "text", "ingredients": "list", "steps": "list", "time": "text"},
     "book": {"title": "text", "author": "text", "quotes": "list", "status": "text"},
     "contact": {"name": "text", "phone": "text", "email": "text", "company": "text"},
     "event": {"name": "text", "date": "text", "time": "text", "venue": "text"},
+    "receipt": {"vendor": "text", "amount": "number", "date": "text", "category": "text"},
     "other": {},
 }
 
@@ -40,6 +42,7 @@ KIND_KEYWORDS = {
     "book": ["book", "author", "novel", "chapter", "read ", "reading", "quote"],
     "contact": ["phone", "contact", "number is", "email", "@", "met "],
     "event": ["event", "wedding", "party", "concert", "meetup", "venue", "conference"],
+    "receipt": ["receipt", "invoice", "total", "paid", "₹", "rs.", "gst", "bill no"],
 }
 
 MAX_TEXT = 200
@@ -68,6 +71,13 @@ def fallback_card(text):
             fields["email"] = email.group(0)
         if phone:
             fields["phone"] = phone.group(0)
+    if kind == "receipt":
+        amount = find_amount(text)
+        date = find_date(text)
+        if amount is not None:
+            fields["amount"] = amount
+        if date:
+            fields["date"] = date
     return {"kind": kind, "fields": fields, "source": "fallback"}
 
 
@@ -91,8 +101,27 @@ def clean_card(data):
             items = [str(v).strip()[:MAX_TEXT] for v in value if str(v).strip()]
             if items:
                 fields[name] = items[:MAX_LIST_ITEMS]
+        elif field_type == "number":
+            number = to_number(value)
+            if number is not None:
+                fields[name] = number
         # Anything else (unknown field, wrong type, empty) is simply dropped.
     return {"kind": kind, "fields": fields, "source": "ai"}
+
+
+def to_number(value):
+    """1250, 1250.5, "1,250.50" or "₹1250" -> a float; anything else -> None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        cleaned = re.sub(r"[^\d.]", "", value)
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+    return None
 
 
 def build_prompt(text):
@@ -108,6 +137,8 @@ Rules:
 - Use "other" if the note is none of these kinds (fields must then be {{}}).
 - Only use facts written in the note. Leave a field out if it is not there.
 - Keep values short.
+- Receipts: "amount" is the final total as a number, "date" is YYYY-MM-DD,
+  "category" is one of: {', '.join(CATEGORIES)}.
 
 Note:
 {text[:3000]}
