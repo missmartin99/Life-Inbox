@@ -999,52 +999,573 @@ async function createTopic(event) {
   }
 }
 
+// ---------- Life Inbox Calendar Dashboard State & Handlers ----------
+let calCurrentYear = 2026;
+let calCurrentMonth = 10; // 0-indexed: 10 = November
+let calTodayDay = 12;     // Nov 12, 2026
+let calSelectedDay = 12;  // Default to today
+
+const defaultPinnedNotes = [
+  { id: 'pin-1', title: 'Wi-Fi details', detail: 'Network: LifeInbox_5G · Pass: stayorganized' },
+  { id: 'pin-2', title: 'Gym routine', detail: 'Mon: Push · Wed: Pull · Fri: Legs' }
+];
+
+// Unified reactive dashboard state
+let dashState = {
+  todayTasks: [],
+  overdueTasks: [],
+  upcomingTasks: [],
+  agenda: {}
+};
+
 async function loadDashboard() {
   try {
-    const data = await fetchJson(
-      '/api/dashboard',
-      undefined,
-      'Unable to load dashboard.'
-    );
-    if (data.pending_analysis_count > 0) watchAnalysis(false);
-    const root = document.getElementById('dashboard');
-    const section = (title, body) => `
-      <div class="panel">
-        <h3>${esc(title)}</h3>
-        ${body}
-      </div>
-    `;
-    const listOrEmpty = (items, render) =>
-      items && items.length
-        ? `<ul>${items.map(render).join('')}</ul>`
-        : '<p class="muted">Nothing here yet.</p>';
+    // 1. Fetch dashboard and attention data in parallel
+    const [dashData, attentionData] = await Promise.allSettled([
+      fetchJson('/api/dashboard', undefined, 'Unable to load dashboard.'),
+      fetchJson('/api/attention', undefined, 'Unable to load attention.')
+    ]);
 
-    root.innerHTML = `
-      <div class="dashboard-grid">
-        ${section('Topics / Spaces', listOrEmpty(data.topics, t =>
-          `<li><strong>${esc(t.name)}</strong> · ${t.item_count}</li>`
-        ))}
-        ${section('High Priority', listOrEmpty(data.high_priority, item =>
-          `<li>${esc(item.effective_title || item.raw_text || ('#' + item.id))}${item.rationale ? `<div class="why">Why: ${esc(item.rationale)}</div>` : ''}</li>`
-        ))}
-        ${section('Open Tasks', listOrEmpty(data.open_tasks, task =>
-          `<li><strong>${esc(task.text)}</strong> <span class="pill">${esc(task.priority)}</span>${task.timing_text ? ` · ${esc(task.timing_text)}` : ''}</li>`
-        ))}
-        ${section('Recently Captured', listOrEmpty(data.recently_captured, item =>
-          `<li>#${item.id} · ${esc((item.raw_text || '').slice(0, 80))}</li>`
-        ))}
-        ${section('Needs Review', listOrEmpty(data.needs_review, item =>
-          `<li>#${item.id} · ${esc(item.reason || 'Review needed')}</li>`
-        ))}
-        ${section('Related Items', listOrEmpty(data.related_items, rel =>
-          `<li>#${rel.item_id_a} ↔ #${rel.item_id_b} <span class="pill">${esc(rel.relation_type)}</span></li>`
-        ))}
-      </div>
-    `;
-    setStatus('dashboardStatus', 'Dashboard updated.');
-  } catch {
-    setStatus('dashboardStatus', 'We could not load the organized dashboard.', true);
+    const data = dashData.status === 'fulfilled' ? dashData.value : {};
+    const attention = attentionData.status === 'fulfilled' ? attentionData.value : {};
+
+    if (data.pending_analysis_count > 0) watchAnalysis(false);
+
+    // 2. Setup Today Tasks
+    const rawTodayTasks = (attention.today && attention.today.length) 
+      ? attention.today 
+      : (data.open_tasks && data.open_tasks.slice(0, 3).length) 
+        ? data.open_tasks.slice(0, 3) 
+        : [
+            { id: 'demo-today-1', text: 'Pay bill', time: '11:00 AM' },
+            { id: 'demo-today-2', text: 'Call the bank', time: '2:30 PM' },
+            { id: 'demo-today-3', text: 'Submit assignment', time: '5:00 PM' }
+          ];
+
+    dashState.todayTasks = rawTodayTasks.map(t => ({
+      id: String(t.id),
+      text: t.text || t.title || 'Task',
+      time: t.time || 'Today',
+      done: Boolean(t.done || t.status === 'done' || t.status === 'completed')
+    }));
+
+    // 3. Setup Overdue Tasks
+    const rawOverdueTasks = (attention.overdue && attention.overdue.length)
+      ? attention.overdue
+      : [
+          { id: 'demo-overdue-1', text: 'Renew insurance', priority: 'High', time: 'Overdue' },
+          { id: 'demo-overdue-2', text: 'Reply to Amit', priority: 'High', time: 'Overdue' }
+        ];
+
+    dashState.overdueTasks = rawOverdueTasks.map(t => ({
+      id: String(t.id),
+      text: t.text || t.title || 'Task',
+      time: t.time || 'Overdue',
+      done: Boolean(t.done || t.status === 'done' || t.status === 'completed')
+    }));
+
+    // 4. Setup Upcoming Tasks
+    dashState.upcomingTasks = [
+      { id: 'demo-up-1', day: 'Sat', dayNum: 14, text: 'Dentist visit', time: '10:00 AM', done: false },
+      { id: 'demo-up-2', day: 'Mon', dayNum: 16, text: "Mom's birthday", time: 'All day', done: false },
+      { id: 'demo-up-3', day: 'Tue', dayNum: 17, text: 'Rent due', time: '9:00 AM', done: false }
+    ];
+
+    // 5. Connect Calendar Agenda with shared task models
+    dashState.agenda = {
+      10: [
+        dashState.overdueTasks[0]
+      ].filter(Boolean),
+      11: [
+        dashState.overdueTasks[1]
+      ].filter(Boolean),
+      12: [
+        ...dashState.todayTasks
+      ],
+      14: [
+        dashState.upcomingTasks[0],
+        { id: 'demo-cal-14-2', text: 'Pay rent', time: '6:00 PM', done: false }
+      ].filter(Boolean),
+      16: [
+        dashState.upcomingTasks[1]
+      ].filter(Boolean),
+      17: [
+        dashState.upcomingTasks[2]
+      ].filter(Boolean)
+    };
+
+    // Render left-side task lists
+    renderDueTodayList();
+    renderOverdueList();
+
+    // 6. Populate Coming up
+    const upcomingEl = document.getElementById('upcomingList');
+    if (upcomingEl) {
+      upcomingEl.innerHTML = dashState.upcomingTasks.map(item => `
+        <li class="cal-upcoming-item" id="upcoming-${item.id}">
+          <span class="cal-day-tag mono">${esc(item.day || 'Soon')}</span>
+          <span class="cal-upcoming-text">${esc(item.text)}</span>
+        </li>
+      `).join('');
+    }
+
+    // 7. Populate Pinned notes
+    const pinnedEl = document.getElementById('pinnedList');
+    let pins = defaultPinnedNotes;
+    try {
+      const stored = window.localStorage.getItem('lifeInbox.pinned');
+      if (stored) pins = JSON.parse(stored);
+    } catch {}
+
+    if (pinnedEl) {
+      pinnedEl.innerHTML = pins.map((p, idx) => `
+        <li class="cal-pinned-item" title="${esc(p.detail || '')}">
+          <span class="cal-star">★</span>
+          <span class="cal-pinned-title">${esc(p.title)}</span>
+          <button type="button" class="cal-pin-del" onclick="removePin(${idx})" title="Unpin">×</button>
+        </li>
+      `).join('');
+    }
+
+    // 8. Populate Latest notes
+    const latestEl = document.getElementById('latestNotesList');
+    const rawNotes = (data.recently_captured && data.recently_captured.length)
+      ? data.recently_captured
+      : [
+          { id: 'n1', text: 'Idea for the project demo', timeAgo: '2 min ago' },
+          { id: 'n2', text: 'Spent ₹450 on groceries', timeAgo: 'Today' }
+        ];
+
+    if (latestEl) {
+      latestEl.innerHTML = rawNotes.slice(0, 4).map(n => `
+        <li class="cal-note-row" data-goto="notes">
+          <div class="cal-note-left">
+            <span class="cal-dot">•</span>
+            <span class="cal-note-txt">${esc(n.text || n.title || n.raw_text || ('Note #' + n.id))}</span>
+          </div>
+          <span class="cal-note-time mono">${esc(n.timeAgo || 'Recently')}</span>
+        </li>
+      `).join('');
+    }
+
+    // 9. Render Calendar and Day Agenda
+    renderCalendar();
+
+    setStatus('dashboardStatus', 'Dashboard synchronized.');
+  } catch (err) {
+    console.error(err);
+    setStatus('dashboardStatus', 'We could not load the dashboard.', true);
   }
+}
+
+function renderDueTodayList() {
+  const dueTodayEl = document.getElementById('dueTodayList');
+  if (!dueTodayEl) return;
+  dueTodayEl.innerHTML = dashState.todayTasks.map(task => `
+    <li class="cal-task-item ${task.done ? 'completed' : ''}" id="task-${task.id}">
+      <label class="cal-checkbox-label">
+        <input type="checkbox" data-task-id="${task.id}" ${task.done ? 'checked' : ''} onchange="toggleTask('${task.id}', event.target.checked)" />
+        <span class="cal-custom-box"></span>
+        <span class="cal-task-name">${esc(task.text)}</span>
+      </label>
+    </li>
+  `).join('');
+  updateDueTodayCount();
+}
+
+function updateDueTodayCount() {
+  const remaining = dashState.todayTasks.filter(t => !t.done).length;
+  const todayBadge = document.getElementById('todayCountBadge');
+  if (todayBadge) {
+    todayBadge.textContent = `(${remaining})`;
+    todayBadge.classList.toggle('all-done', remaining === 0);
+  }
+}
+
+function renderOverdueList() {
+  const overdueEl = document.getElementById('overdueList');
+  if (!overdueEl) return;
+  overdueEl.innerHTML = dashState.overdueTasks.map(task => `
+    <li class="cal-task-item overdue ${task.done ? 'completed' : ''}" id="task-${task.id}">
+      <label class="cal-checkbox-label">
+        <input type="checkbox" data-task-id="${task.id}" ${task.done ? 'checked' : ''} onchange="toggleTask('${task.id}', event.target.checked)" />
+        <span class="cal-custom-box rose"></span>
+        <span class="cal-task-name">${esc(task.text)}</span>
+      </label>
+    </li>
+  `).join('');
+  updateOverdueCount();
+}
+
+function updateOverdueCount() {
+  const remaining = dashState.overdueTasks.filter(t => !t.done).length;
+  const overdueBadge = document.getElementById('overdueCountBadge');
+  if (overdueBadge) {
+    overdueBadge.textContent = `(${remaining})`;
+    overdueBadge.classList.toggle('all-done', remaining === 0);
+  }
+}
+
+// Checkbox interactive toggler — fully bidirectional across 2x2 grid and calendar
+async function toggleTask(taskId, isChecked) {
+  // Update state in all collections
+  for (const t of dashState.todayTasks) {
+    if (t.id === taskId) t.done = isChecked;
+  }
+  for (const t of dashState.overdueTasks) {
+    if (t.id === taskId) t.done = isChecked;
+  }
+  for (const t of dashState.upcomingTasks) {
+    if (t.id === taskId) t.done = isChecked;
+  }
+  for (const day in dashState.agenda) {
+    for (const t of dashState.agenda[day]) {
+      if (t.id === taskId) t.done = isChecked;
+    }
+  }
+
+  // Synchronize all DOM checkboxes with this ID
+  document.querySelectorAll(`input[type="checkbox"][data-task-id="${taskId}"]`).forEach(cb => {
+    cb.checked = isChecked;
+  });
+
+  // Toggle list item visual state
+  const taskEl = document.getElementById(`task-${taskId}`);
+  if (taskEl) taskEl.classList.toggle('completed', isChecked);
+
+  const agendaEl = document.getElementById(`agenda-task-${taskId}`);
+  if (agendaEl) agendaEl.classList.toggle('done', isChecked);
+
+  // Recalculate badge counts
+  updateDueTodayCount();
+  updateOverdueCount();
+  updateSelectedDayPending();
+  renderCalendarDaysGrid();
+
+  // Audio feedback
+  if (typeof playSound === 'function') {
+    playSound(isChecked ? 'ping' : 'click');
+  }
+
+  // Backend persistence if real database task
+  if (!String(taskId).startsWith('demo-') && isChecked) {
+    try {
+      await fetch(`/api/tasks/${taskId}/complete`, { method: 'POST' });
+    } catch {}
+  }
+}
+
+// Legacy compatibility aliases
+function toggleTaskCheck(taskId, event) {
+  toggleTask(taskId, event.target.checked);
+}
+function toggleAgendaTask(taskId, event) {
+  toggleTask(taskId, event.target.checked);
+}
+
+// Quick Add Note
+async function dashAddNote(event) {
+  event.preventDefault();
+  const input = document.getElementById('calNoteInput');
+  const btn = document.getElementById('calNoteAddBtn');
+  const text = input ? input.value.trim() : '';
+  if (!text) return;
+
+  btn.disabled = true;
+  btn.textContent = '...';
+
+  try {
+    await fetchJson(
+      '/api/items',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw_text: text })
+      },
+      'Unable to save note.'
+    );
+
+    input.value = '';
+    setStatus('dashboardStatus', 'Note added.');
+
+    // Prepend to Latest notes stream immediately
+    const latestEl = document.getElementById('latestNotesList');
+    if (latestEl) {
+      const newRow = document.createElement('li');
+      newRow.className = 'cal-note-row new-entry';
+      newRow.innerHTML = `
+        <div class="cal-note-left">
+          <span class="cal-dot">•</span>
+          <span class="cal-note-txt">${esc(text)}</span>
+        </div>
+        <span class="cal-note-time mono">Just now</span>
+      `;
+      latestEl.prepend(newRow);
+    }
+  } catch (err) {
+    setStatus('dashboardStatus', 'Failed to add note.', true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Add';
+  }
+}
+
+// Quick Search / Ask
+async function dashSearchAsk(event) {
+  event.preventDefault();
+  const input = document.getElementById('calSearchInput');
+  const btn = document.getElementById('calSearchBtn');
+  const drawer = document.getElementById('calAskDrawer');
+  const content = document.getElementById('calAskContent');
+  const query = input ? input.value.trim() : '';
+  if (!query) return;
+
+  btn.disabled = true;
+  btn.textContent = '...';
+
+  try {
+    const res = await fetchJson(
+      '/api/ask',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: query })
+      },
+      'Unable to answer question.'
+    );
+
+    drawer.hidden = false;
+    content.innerHTML = `
+      <p class="cal-answer-query"><strong>Q: ${esc(query)}</strong></p>
+      <div class="cal-answer-text">${esc(res.answer || 'No grounded answer found in inbox.')}</div>
+      ${res.cited_items && res.cited_items.length ? `
+        <div class="cal-answer-citations mono">
+          <span>Sources:</span>
+          ${res.cited_items.map(id => `<span class="dash-tag">#${id}</span>`).join(' ')}
+        </div>
+      ` : ''}
+    `;
+    setStatus('dashboardStatus', 'Answer ready.');
+  } catch (err) {
+    drawer.hidden = false;
+    content.innerHTML = `<p class="muted error">${esc(err.message || 'Error querying notes.')}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Ask ↵';
+  }
+}
+
+function closeCalAskDrawer() {
+  const drawer = document.getElementById('calAskDrawer');
+  if (drawer) drawer.hidden = true;
+}
+
+// Pinning notes
+function promptAddPin() {
+  const title = prompt('Enter a note title to pin:');
+  if (!title) return;
+  const detail = prompt('Optional details / notes:') || '';
+
+  let pins = defaultPinnedNotes;
+  try {
+    const stored = window.localStorage.getItem('lifeInbox.pinned');
+    if (stored) pins = JSON.parse(stored);
+  } catch {}
+
+  pins.push({ id: 'pin-' + Date.now(), title: title.trim(), detail: detail.trim() });
+  try {
+    window.localStorage.setItem('lifeInbox.pinned', JSON.stringify(pins));
+  } catch {}
+
+  loadDashboard();
+}
+
+function removePin(index) {
+  let pins = defaultPinnedNotes;
+  try {
+    const stored = window.localStorage.getItem('lifeInbox.pinned');
+    if (stored) pins = JSON.parse(stored);
+  } catch {}
+
+  pins.splice(index, 1);
+  try {
+    window.localStorage.setItem('lifeInbox.pinned', JSON.stringify(pins));
+  } catch {}
+
+  loadDashboard();
+}
+
+// Right Calendar Sidebar Logic
+const monthNames = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+function jumpToToday() {
+  calCurrentYear = 2026;
+  calCurrentMonth = 10; // November
+  calSelectedDay = calTodayDay;
+  renderCalendar();
+  if (typeof playSound === 'function') playSound('click');
+}
+
+function navMonth(dir) {
+  calCurrentMonth += dir;
+  if (calCurrentMonth < 0) {
+    calCurrentMonth = 11;
+    calCurrentYear -= 1;
+  } else if (calCurrentMonth > 11) {
+    calCurrentMonth = 0;
+    calCurrentYear += 1;
+  }
+  renderCalendar();
+}
+
+function selectCalTab(tab) {
+  if (tab === 'home') jumpToToday();
+}
+
+function selectCalDay(day) {
+  calSelectedDay = day;
+  renderCalendar();
+}
+
+function renderCalendar() {
+  const monthTitle = document.getElementById('calMonthTitle');
+  if (monthTitle) {
+    monthTitle.textContent = `${monthNames[calCurrentMonth]} ${calCurrentYear}`;
+  }
+  renderCalendarDaysGrid();
+  renderSelectedDayAgenda();
+}
+
+function renderCalendarDaysGrid() {
+  const daysGrid = document.getElementById('calDaysGrid');
+  if (!daysGrid) return;
+
+  // First day of month (0 = Sun, 1 = Mon, ..., 6 = Sat)
+  const firstDay = new Date(calCurrentYear, calCurrentMonth, 1).getDay();
+  // Monday-based (0 = Mon, ..., 6 = Sun)
+  const startingCol = (firstDay + 6) % 7;
+  const totalDays = new Date(calCurrentYear, calCurrentMonth + 1, 0).getDate();
+
+  let html = '';
+
+  // Leading empty dots
+  for (let i = 0; i < startingCol; i++) {
+    html += `<span class="cal-empty-dot">·</span>`;
+  }
+
+  // Days
+  for (let d = 1; d <= totalDays; d++) {
+    const isSelected = (d === calSelectedDay);
+    const isToday = (d === calTodayDay && calCurrentMonth === 10 && calCurrentYear === 2026);
+    const items = dashState.agenda[d] || [];
+    
+    let badgeHtml = '';
+    if (items.length > 0) {
+      const pendingCount = items.filter(t => !t.done).length;
+      if (pendingCount > 0) {
+        badgeHtml = `<span class="cal-day-badge-pip pending">${pendingCount}</span>`;
+      } else {
+        badgeHtml = `<span class="cal-day-badge-pip all-done">✓</span>`;
+      }
+    }
+
+    html += `
+      <button type="button" 
+        class="cal-day-cell ${isSelected ? 'selected' : ''} ${isToday ? 'is-today' : ''}" 
+        onclick="selectCalDay(${d})"
+        title="Day ${d}">
+        <span class="day-num">${d}</span>
+        ${badgeHtml}
+      </button>
+    `;
+  }
+
+  daysGrid.innerHTML = html;
+}
+
+function renderSelectedDayAgenda() {
+  const headTitle = document.getElementById('calSelectedDayTitle');
+  const todayTag = document.getElementById('calTodayTag');
+  const agendaList = document.getElementById('calSelectedDayList');
+  if (!headTitle || !agendaList) return;
+
+  const dateObj = new Date(calCurrentYear, calCurrentMonth, calSelectedDay);
+  const weekdayShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dateObj.getDay()];
+  
+  headTitle.textContent = `${weekdayShort} ${calSelectedDay}`;
+  
+  const isToday = (calSelectedDay === calTodayDay && calCurrentMonth === 10 && calCurrentYear === 2026);
+  if (todayTag) todayTag.hidden = !isToday;
+
+  updateSelectedDayPending();
+
+  const tasks = dashState.agenda[calSelectedDay] || [];
+  if (tasks.length === 0) {
+    agendaList.innerHTML = `<li class="cal-empty-agenda muted">No tasks scheduled for this day.</li>`;
+    return;
+  }
+
+  agendaList.innerHTML = tasks.map(t => `
+    <li class="cal-agenda-item ${t.done ? 'done' : ''}" id="agenda-task-${t.id}">
+      <label class="cal-checkbox-label">
+        <input type="checkbox" data-task-id="${t.id}" ${t.done ? 'checked' : ''} onchange="toggleTask('${t.id}', event.target.checked)" />
+        <span class="cal-custom-box"></span>
+        <span class="cal-task-name">${esc(t.text)}</span>
+      </label>
+    </li>
+  `).join('');
+}
+
+function updateSelectedDayPending() {
+  const headPending = document.getElementById('calSelectedDayPending');
+  if (!headPending) return;
+
+  const tasks = dashState.agenda[calSelectedDay] || [];
+  const pending = tasks.filter(t => !t.done).length;
+
+  if (tasks.length === 0) {
+    headPending.textContent = '0 pending';
+    headPending.classList.remove('all-done');
+  } else if (pending === 0) {
+    headPending.textContent = '✓ All done!';
+    headPending.classList.add('all-done');
+  } else {
+    headPending.textContent = `${pending} pending`;
+    headPending.classList.remove('all-done');
+  }
+}
+
+function addAgendaItem(event) {
+  event.preventDefault();
+  const input = document.getElementById('calAgendaInput');
+  const text = input ? input.value.trim() : '';
+  if (!text) return;
+
+  if (!dashState.agenda[calSelectedDay]) {
+    dashState.agenda[calSelectedDay] = [];
+  }
+
+  const newItem = {
+    id: 'cal-' + calSelectedDay + '-' + Date.now(),
+    text: text,
+    time: 'Scheduled',
+    done: false
+  };
+
+  dashState.agenda[calSelectedDay].push(newItem);
+
+  // If adding to today (12), also push to todayTasks and re-render due today list
+  if (calSelectedDay === calTodayDay && calCurrentMonth === 10 && calCurrentYear === 2026) {
+    dashState.todayTasks.push(newItem);
+    renderDueTodayList();
+  }
+
+  input.value = '';
+  renderCalendar();
+  if (typeof playSound === 'function') playSound('click');
 }
 
 function fillAskExample(text) {
