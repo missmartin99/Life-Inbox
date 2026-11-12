@@ -234,6 +234,32 @@ you forget goes back to box 0 and comes back tomorrow.
 - `POST /api/flashcards/{id}/review` with `{"remembered": true}` (or `false`)
   schedules the next review.
 
+### Public API, webhooks and MCP server
+
+**API tokens** let programs use Life Inbox without logging in:
+
+- `POST /api/tokens` with `{"name": "my script"}` returns a `li_...` token
+  (shown only once; only its hash is stored);
+- send it as `Authorization: Bearer li_...`;
+- `GET /api/tokens` lists tokens, `DELETE /api/tokens/{id}` revokes one.
+
+**Webhooks** POST to your URL when an item is created:
+
+- `POST /api/webhooks` with `{"url": "https://..."}` returns a `secret`;
+- each delivery has `X-LifeInbox-Signature: sha256=<HMAC of the body>`;
+- local and private addresses are rejected.
+
+**MCP server** (`mcp_server/server.py`) gives AI assistants four tools:
+`search_inbox`, `ask_inbox`, `add_note`, `what_needs_attention`. It is a
+separate program that calls the API with a token:
+
+```bash
+LIFE_INBOX_URL=http://127.0.0.1:8000 LIFE_INBOX_TOKEN=li_... python -m mcp_server.server
+```
+
+**Deploying** on Oracle Cloud's free tier with HTTPS: see
+[docs/deploy-oracle.md](docs/deploy-oracle.md).
+
 ## 4. Optional: configure OpenAI
 
 If you want AI analysis instead of the local fallback, set your API key in the

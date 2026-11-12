@@ -1,9 +1,19 @@
 import logging
+import secrets
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.capture.image_extract import process_image_bytes, validate_image_upload
@@ -26,7 +36,15 @@ from app.entities import ENTITY_TYPES, extract_entities
 from app.attention import dates as attention_dates
 from app.flashcards import make_cards, next_review
 from app.resurface import resurface
+from app.api_access import WEBHOOK_EVENTS, deliver_webhooks, new_token
 from app.database import (
+    add_api_token,
+    add_webhook,
+    delete_api_token,
+    delete_webhook,
+    list_api_tokens,
+    list_webhooks,
+    webhooks_for_event,
     add_flashcards,
     get_flashcard,
     list_due_flashcards,
@@ -91,6 +109,8 @@ from app.organizer import analyze_inbox_with_openai, validate_analysis_result
 from app.retrieval.ask import build_grounded_answer
 from app.retrieval.search import search_passages
 from app.schemas import (
+    ApiTokenCreate,
+    WebhookCreate,
     FlashcardReview,
     RedactPreviewRequest,
     SensitiveUpdate,
@@ -143,6 +163,16 @@ async def bind_owner_from_session(request, call_next):
 
     token = request.cookies.get(SESSION_COOKIE)
     owner_id = parse_session_token(token) if token else None
+    if owner_id is None:
+        # Programs (scripts, the MCP server) send "Authorization: Bearer li_..."
+        from app.api_access import hash_token, token_from_header
+        from app.database import owner_for_token_hash
+
+        api_token = token_from_header(request.headers.get("authorization"))
+        if api_token:
+            owner_id = owner_for_token_hash(hash_token(api_token))
+            if owner_id is None:
+                return JSONResponse({"detail": "Invalid API token"}, status_code=401)
     if owner_id is None:
         config = load_config(strict=False)
         if config.environment == "local":
@@ -407,9 +437,11 @@ def _process_voice_item(item_id: int) -> dict:
 
 
 @app.post("/api/items", response_model=InboxItem)
-def create_item(payload: InboxItemCreate):
+def create_item(payload: InboxItemCreate, background_tasks: BackgroundTasks):
     try:
-        return add_item_to_db(payload.raw_text)
+        item = add_item_to_db(payload.raw_text)
+        queue_webhooks(background_tasks, "item.created", item)
+        return item
     except Exception as exc:
         logger.exception("Failed to save inbox item")
         raise HTTPException(
@@ -419,7 +451,7 @@ def create_item(payload: InboxItemCreate):
 
 
 @app.post("/api/items/url", response_model=InboxItem)
-def create_url_item(payload: UrlItemCreate):
+def create_url_item(payload: UrlItemCreate, background_tasks: BackgroundTasks):
     try:
         url = validate_public_http_url(payload.url)
     except ValueError as exc:
@@ -434,11 +466,15 @@ def create_url_item(payload: UrlItemCreate):
             detail="Unable to save URL. Please try again.",
         ) from exc
 
-    return _process_url_item(item["id"])
+    item = _process_url_item(item["id"])
+    queue_webhooks(background_tasks, "item.created", item)
+    return item
 
 
 @app.post("/api/items/pdf", response_model=InboxItem)
-async def create_pdf_item(file: UploadFile = File(...)):
+async def create_pdf_item(
+    background_tasks: BackgroundTasks, file: UploadFile = File(...)
+):
     data = await file.read()
     try:
         safe_filename = validate_pdf_upload(
@@ -470,11 +506,15 @@ async def create_pdf_item(file: UploadFile = File(...)):
             detail="Unable to save PDF. Please try again.",
         ) from exc
 
-    return _process_pdf_item(item["id"])
+    item = _process_pdf_item(item["id"])
+    queue_webhooks(background_tasks, "item.created", item)
+    return item
 
 
 @app.post("/api/items/image", response_model=InboxItem)
-async def create_image_item(file: UploadFile = File(...)):
+async def create_image_item(
+    background_tasks: BackgroundTasks, file: UploadFile = File(...)
+):
     data = await file.read()
     try:
         safe_filename, detected_mime, extension = validate_image_upload(
@@ -516,11 +556,15 @@ async def create_image_item(file: UploadFile = File(...)):
             detail="Unable to save image. Please try again.",
         ) from exc
 
-    return _process_image_item(item["id"])
+    item = _process_image_item(item["id"])
+    queue_webhooks(background_tasks, "item.created", item)
+    return item
 
 
 @app.post("/api/items/voice", response_model=InboxItem)
-async def create_voice_item(file: UploadFile = File(...)):
+async def create_voice_item(
+    background_tasks: BackgroundTasks, file: UploadFile = File(...)
+):
     data = await file.read()
     try:
         safe_filename, detected_mime, extension = validate_audio_upload(
@@ -568,7 +612,9 @@ async def create_voice_item(file: UploadFile = File(...)):
             detail="Unable to save voice note. Please try again.",
         ) from exc
 
-    return _process_voice_item(item["id"])
+    item = _process_voice_item(item["id"])
+    queue_webhooks(background_tasks, "item.created", item)
+    return item
 
 
 @app.get("/api/items/{item_id}/file")
@@ -1180,6 +1226,61 @@ def review_flashcard(card_id: int, body: FlashcardReview):
     today = attention_dates.today_in_configured_tz()
     box, due = next_review(card["box"], body.remembered, today)
     return save_flashcard_review(card_id, box, due.isoformat())
+
+
+# --- Public API: tokens and webhooks ----------------------------------------
+
+
+def queue_webhooks(background_tasks: BackgroundTasks, event: str, data) -> None:
+    """Send `event` to the user's webhooks after the response has gone out."""
+    hooks = webhooks_for_event(event)
+    if hooks:
+        background_tasks.add_task(deliver_webhooks, hooks, event, data)
+
+
+@app.post("/api/tokens")
+def create_api_token(body: ApiTokenCreate):
+    """Create an API token. The token itself is shown ONLY in this response."""
+    token, token_hash = new_token()
+    saved = add_api_token(body.name, token_hash)
+    return {**saved, "token": token}
+
+
+@app.get("/api/tokens")
+def get_api_tokens():
+    return list_api_tokens()
+
+
+@app.delete("/api/tokens/{token_id}", status_code=204)
+def revoke_api_token(token_id: int):
+    if not delete_api_token(token_id):
+        raise HTTPException(status_code=404, detail="Token not found")
+    return Response(status_code=204)
+
+
+@app.post("/api/webhooks")
+def create_webhook(body: WebhookCreate):
+    """Register a URL to receive events. The signing secret is shown only once."""
+    if body.event not in WEBHOOK_EVENTS:
+        raise HTTPException(status_code=400, detail=f"Event must be one of {WEBHOOK_EVENTS}")
+    try:
+        url = validate_public_http_url(body.url)  # blocks localhost / private IPs
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    secret = secrets.token_hex(16)
+    return {**add_webhook(url, body.event, secret), "secret": secret}
+
+
+@app.get("/api/webhooks")
+def get_webhooks():
+    return list_webhooks()
+
+
+@app.delete("/api/webhooks/{webhook_id}", status_code=204)
+def remove_webhook(webhook_id: int):
+    if not delete_webhook(webhook_id):
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    return Response(status_code=204)
 
 
 # --- Privacy --------------------------------------------------------------

@@ -189,6 +189,34 @@ class FlashcardRecord(Base):
     last_reviewed_at = Column(Text, nullable=True)
 
 
+class ApiTokenRecord(Base):
+    """A token a program uses instead of logging in. Only the hash is stored."""
+
+    __tablename__ = "api_tokens"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    name = Column(Text, nullable=False)
+    token_hash = Column(Text, nullable=False, unique=True)
+    created_at = Column(Text, nullable=False)
+    last_used_at = Column(Text, nullable=True)
+
+
+class WebhookRecord(Base):
+    """A URL we POST to when an event (e.g. item.created) happens."""
+
+    __tablename__ = "webhooks"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    url = Column(Text, nullable=False)
+    event = Column(Text, nullable=False)
+    secret = Column(Text, nullable=False)
+    created_at = Column(Text, nullable=False)
+
+
 class AiCallLogRecord(Base):
     """One row per AI call: what feature, which model, how much was sent.
 
@@ -2239,3 +2267,118 @@ def get_flashcard(card_id: int) -> Optional[dict]:
         if card is None or card.owner_user_id != owner_id:
             return None
         return _flashcard_to_dict(card)
+
+
+# ---------------------------------------------------------------------------
+# Public API: tokens and webhooks
+# ---------------------------------------------------------------------------
+
+
+def _token_to_dict(token: ApiTokenRecord) -> dict:
+    # Never return token_hash -- not even the hash leaves the server.
+    return {
+        "id": token.id,
+        "name": token.name,
+        "created_at": token.created_at,
+        "last_used_at": token.last_used_at,
+    }
+
+
+def add_api_token(name: str, token_hash: str) -> dict:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        token = ApiTokenRecord(
+            owner_user_id=owner_id,
+            name=name,
+            token_hash=token_hash,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        session.add(token)
+        session.commit()
+        return _token_to_dict(token)
+
+
+def list_api_tokens() -> list:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        tokens = session.scalars(
+            select(ApiTokenRecord).where(ApiTokenRecord.owner_user_id == owner_id)
+        )
+        return [_token_to_dict(t) for t in tokens]
+
+
+def delete_api_token(token_id: int) -> bool:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        token = session.get(ApiTokenRecord, token_id)
+        if token is None or token.owner_user_id != owner_id:
+            return False
+        session.delete(token)
+        session.commit()
+        return True
+
+
+def owner_for_token_hash(token_hash: str) -> Optional[int]:
+    """Which user a token belongs to (None if unknown). Records last use."""
+    with SessionLocal() as session:
+        token = session.scalars(
+            select(ApiTokenRecord).where(ApiTokenRecord.token_hash == token_hash)
+        ).first()
+        if token is None:
+            return None
+        token.last_used_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return token.owner_user_id
+
+
+def _webhook_to_dict(hook: WebhookRecord) -> dict:
+    return {"id": hook.id, "url": hook.url, "event": hook.event, "created_at": hook.created_at}
+
+
+def add_webhook(url: str, event: str, secret: str) -> dict:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        hook = WebhookRecord(
+            owner_user_id=owner_id,
+            url=url,
+            event=event,
+            secret=secret,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        session.add(hook)
+        session.commit()
+        return _webhook_to_dict(hook)
+
+
+def list_webhooks() -> list:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        hooks = session.scalars(
+            select(WebhookRecord).where(WebhookRecord.owner_user_id == owner_id)
+        )
+        return [_webhook_to_dict(h) for h in hooks]
+
+
+def webhooks_for_event(event: str) -> list:
+    """Webhooks (with their secrets, for signing) for the current user."""
+    owner_id = get_current_owner_id()
+    if owner_id is None:
+        return []
+    with SessionLocal() as session:
+        hooks = session.scalars(
+            select(WebhookRecord).where(
+                WebhookRecord.owner_user_id == owner_id, WebhookRecord.event == event
+            )
+        )
+        return [{"url": h.url, "secret": h.secret} for h in hooks]
+
+
+def delete_webhook(webhook_id: int) -> bool:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        hook = session.get(WebhookRecord, webhook_id)
+        if hook is None or hook.owner_user_id != owner_id:
+            return False
+        session.delete(hook)
+        session.commit()
+        return True

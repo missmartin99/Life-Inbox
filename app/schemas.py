@@ -78,6 +78,15 @@ class SensitiveUpdate(BaseModel):
     sensitive: bool
 
 
+class ApiTokenCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class WebhookCreate(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+    event: str = "item.created"
+
+
 class FlashcardReview(BaseModel):
     remembered: bool
 
