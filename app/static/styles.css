@@ -1428,29 +1428,124 @@ label { display: grid; gap: 6px; font-size: 12px; color: var(--text-3); letter-s
 .feature-badge.organization { background: rgba(139, 92, 246, 0.15); color: var(--violet); border-color: rgba(139, 92, 246, 0.3); }
 .feature-badge.sensitive { background: rgba(248, 113, 113, 0.15); color: var(--red-text); border-color: rgba(248, 113, 113, 0.3); }
 
-/* Entity Graph & Dossier */
-.entity-graph-container {
+/* Entity Treemap & Dossier */
+.treemap-wrapper {
+  margin-bottom: 24px;
+}
+.treemap-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+  font: 400 12px/1.4 var(--sans);
+}
+.legend-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-tag);
+  font: 500 12px/1.2 var(--mono);
+}
+.legend-pill.person {
+  background: rgba(6, 182, 212, 0.15);
+  color: var(--cyan);
+  border: 1px solid rgba(6, 182, 212, 0.35);
+}
+.legend-pill.place {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--amber);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+.legend-pill.organization {
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--violet);
+  border: 1px solid rgba(139, 92, 246, 0.35);
+}
+.legend-hint {
+  margin-left: auto;
+  font: 400 12px/1.4 var(--mono);
+  color: var(--muted);
+}
+.entity-treemap-container {
   position: relative;
   width: 100%;
-  height: 380px;
+  height: 480px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   overflow: hidden;
-  margin-bottom: 24px;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.2);
 }
-.entity-canvas {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-.graph-overlay-hint {
+.treemap-cell {
   position: absolute;
-  bottom: 12px;
-  left: 16px;
-  font: 400 12px/1.4 var(--mono);
-  color: var(--muted);
-  pointer-events: none;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s ease, border-color 0.18s ease;
+  user-select: none;
+}
+.treemap-cell:hover, .treemap-cell:focus-visible {
+  transform: scale(1.02);
+  z-index: 10;
+  outline: none;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.25);
+}
+.treemap-cell.person {
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.22), rgba(8, 145, 178, 0.40));
+  border-color: rgba(6, 182, 212, 0.4);
+  color: #e0f2fe;
+}
+.treemap-cell.person:hover {
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.42), rgba(8, 145, 178, 0.65));
+  border-color: #22d3ee;
+}
+.treemap-cell.place {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(217, 119, 6, 0.40));
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #fef3c7;
+}
+.treemap-cell.place:hover {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.42), rgba(217, 119, 6, 0.65));
+  border-color: #fbbf24;
+}
+.treemap-cell.organization {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.22), rgba(109, 40, 217, 0.40));
+  border-color: rgba(139, 92, 246, 0.4);
+  color: #ede9fe;
+}
+.treemap-cell.organization:hover {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.42), rgba(109, 40, 217, 0.65));
+  border-color: #a78bfa;
+}
+.treemap-cell-icon {
+  font-size: 13px;
+  line-height: 1;
+  margin-bottom: 2px;
+  opacity: 0.9;
+}
+.treemap-cell-name {
+  font-weight: 600;
+  font-size: 12.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 95%;
+  color: inherit;
+}
+.treemap-cell-count {
+  font: 500 10.5px/1.2 var(--mono);
+  opacity: 0.8;
+  margin-top: 3px;
+  white-space: nowrap;
 }
 .entity-grid {
   display: grid;

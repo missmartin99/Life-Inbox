@@ -597,25 +597,9 @@ function renderNote(note) {
     try {
       const res = await fetchJson(`/api/items/${note.id}/entities`, {method: 'POST'});
       extractEntBtn.textContent = `👤 ${res.length} Entities`;
-      if (window.toast) window.toast(`Extracted ${res.length} entities! Check 05 Entities tab.`);
+      if (window.toast) window.toast(`Extracted ${res.length} entities! Check 05 Entities Treemap tab.`);
     } catch {
       extractEntBtn.textContent = '👤 Entities';
-    }
-  };
-
-  const flashcardBtn = document.createElement('button');
-  flashcardBtn.type = 'button';
-  flashcardBtn.className = 'note-tool-btn';
-  flashcardBtn.textContent = '🗂️ Flashcard';
-  flashcardBtn.title = 'Generate study flashcards from this note';
-  flashcardBtn.onclick = async () => {
-    flashcardBtn.textContent = 'Making…';
-    try {
-      const res = await fetchJson(`/api/items/${note.id}/flashcards`, {method: 'POST'});
-      flashcardBtn.textContent = `🗂️ ${res.length} Cards`;
-      if (window.toast) window.toast(`Created ${res.length} flashcards! Check 07 Flashcards tab.`);
-    } catch {
-      flashcardBtn.textContent = '🗂️ Flashcard';
     }
   };
 
@@ -638,7 +622,7 @@ function renderNote(note) {
     }
   };
 
-  featureBar.append(makeCardBtn, extractEntBtn, flashcardBtn, sensBtn);
+  featureBar.append(makeCardBtn, extractEntBtn, sensBtn);
   root.append(text, time, featureBar, actions);
   return root;
 }
@@ -1251,15 +1235,15 @@ window.addEventListener('popstate', () => {
 });
 
 /* =========================================================================
-   Applied AI UI Extensions: Entities Graph, Smart Cards, Flashcards, API
+   Applied AI UI Extensions: Entities Treemap, Smart Cards, API & MCP
    ========================================================================= */
 
-// --- 05 · Entities & Knowledge Graph -------------------------------------
+// --- 05 · Entities Treemap -----------------------------------------------
 let allEntitiesCache = [];
-let entityGraphNodes = [];
-let entityGraphAnimFrame = null;
+let currentEntityTypeFilter = '';
 
 async function loadEntities(typeFilter = '') {
+  currentEntityTypeFilter = typeFilter;
   const statusEl = document.getElementById('entitiesStatus');
   const listEl = document.getElementById('entitiesList');
   if (!listEl) return;
@@ -1270,22 +1254,22 @@ async function loadEntities(typeFilter = '') {
     if (entities.length === 0) {
       statusEl.textContent = 'No entities discovered yet. Click "Extract Entities from All Notes" to analyze your inbox!';
       listEl.innerHTML = '';
-      drawEntityGraph([]);
+      renderEntityTreemap([]);
       return;
     }
-    statusEl.textContent = `Found ${entities.length} entities across your notes:`;
+    statusEl.textContent = `Visualizing ${entities.length} entities scaled by note mentions:`;
     listEl.innerHTML = entities.map(ent => `
       <div class="entity-card" onclick="showDossier(${ent.id})">
         <div class="entity-card-head">
           <span class="feature-badge ${ent.type}">${ent.type === 'person' ? '👤 Person' : ent.type === 'place' ? '📍 Place' : '🏢 Org'}</span>
-          <span class="mono" style="font-size:12px; color:var(--muted)">${ent.mention_count || 1} mentions</span>
+          <span class="mono" style="font-size:12px; color:var(--muted)">${ent.item_count || ent.mention_count || 1} mentions</span>
         </div>
         <div class="entity-card-title">${esc(ent.name)}</div>
         <div class="muted" style="font-size:12px; margin-top:6px;">Click to view full dossier & related notes &rarr;</div>
       </div>
     `).join('');
 
-    drawEntityGraph(entities);
+    renderEntityTreemap(entities);
   } catch (err) {
     statusEl.textContent = 'Failed to load entities.';
   }
@@ -1352,95 +1336,124 @@ async function scanAllNotesForEntities() {
   }
 }
 
-function drawEntityGraph(entities) {
-  const canvas = document.getElementById('entityGraphCanvas');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  ctx.scale(dpr, dpr);
+function renderEntityTreemap(entities) {
+  const container = document.getElementById('entityTreemap');
+  if (!container) return;
 
-  const width = rect.width;
-  const height = rect.height;
-  const cx = width / 2;
-  const cy = height / 2;
+  if (!entities || entities.length === 0) {
+    container.innerHTML = '<div style="display:flex; height:100%; align-items:center; justify-content:center; color:var(--muted); font-size:13px;">No entities to visualize yet.</div>';
+    return;
+  }
 
-  // Center node: "Life Inbox"
-  const nodes = [{
-    id: 0,
-    name: "Life Inbox",
-    type: "center",
-    x: cx,
-    y: cy,
-    radius: 28,
-    color: "#6366F1"
-  }];
+  const width = container.clientWidth || 900;
+  const height = 480;
 
-  const displayList = entities.slice(0, 18);
-  const angleStep = (2 * Math.PI) / (displayList.length || 1);
-  const radius = Math.min(width, height) * 0.38;
+  const total = entities.reduce((sum, it) => sum + (it.item_count || it.mention_count || 1), 0);
+  if (total <= 0) return;
 
-  displayList.forEach((ent, i) => {
-    const angle = i * angleStep;
-    const color = ent.type === 'person' ? '#22D3EE' : ent.type === 'place' ? '#FBBF24' : '#8B5CF6';
-    nodes.push({
-      id: ent.id,
-      name: ent.name,
-      type: ent.type,
-      x: cx + radius * Math.cos(angle) + (Math.random() - 0.5) * 20,
-      y: cy + radius * Math.sin(angle) + (Math.random() - 0.5) * 20,
-      radius: Math.min(22, 14 + (ent.mention_count || 1) * 2),
-      color: color
-    });
-  });
+  const scale = (width * height) / total;
+  const items = entities.map(it => ({
+    ...it,
+    value: it.item_count || it.mention_count || 1,
+    area: (it.item_count || it.mention_count || 1) * scale
+  })).sort((a, b) => b.value - a.value);
 
-  ctx.clearRect(0, 0, width, height);
+  const rect = { x: 0, y: 0, w: width, h: height };
+  const layout = [];
 
-  // Draw connecting edges
-  for (let i = 1; i < nodes.length; i++) {
-    const target = nodes[i];
-    ctx.beginPath();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
-    ctx.lineWidth = 1.2;
-    ctx.moveTo(cx, cy);
-    ctx.lineTo(target.x, target.y);
-    ctx.stroke();
+  function worst(row, side) {
+    if (!row || row.length === 0) return Infinity;
+    const s2 = side * side;
+    const S = row.reduce((sum, item) => sum + item.area, 0);
+    const S2 = S * S;
+    let maxAspect = 0;
+    for (const item of row) {
+      const a = item.area;
+      const aspect = Math.max((s2 * a) / S2, S2 / (s2 * a));
+      if (aspect > maxAspect) maxAspect = aspect;
+    }
+    return maxAspect;
+  }
 
-    // Secondary ring links
-    if (i > 1) {
-      const prev = nodes[i - 1];
-      ctx.beginPath();
-      ctx.strokeStyle = "rgba(99, 102, 241, 0.08)";
-      ctx.lineWidth = 1;
-      ctx.moveTo(prev.x, prev.y);
-      ctx.lineTo(target.x, target.y);
-      ctx.stroke();
+  function layoutRow(row, side) {
+    if (!row || row.length === 0) return;
+    const S = row.reduce((sum, item) => sum + item.area, 0);
+    const isHorizontal = rect.w < rect.h;
+    const rowThickness = S / side;
+    let offset = 0;
+
+    for (const item of row) {
+      if (isHorizontal) {
+        const itemWidth = item.area / rowThickness;
+        layout.push({ ...item, x: rect.x + offset, y: rect.y, w: itemWidth, h: rowThickness });
+        offset += itemWidth;
+      } else {
+        const itemHeight = item.area / rowThickness;
+        layout.push({ ...item, x: rect.x, y: rect.y + offset, w: rowThickness, h: itemHeight });
+        offset += itemHeight;
+      }
+    }
+
+    if (isHorizontal) {
+      rect.y += rowThickness;
+      rect.h -= rowThickness;
+    } else {
+      rect.x += rowThickness;
+      rect.w -= rowThickness;
     }
   }
 
-  // Draw nodes
-  nodes.forEach(node => {
-    ctx.beginPath();
-    ctx.arc(node.x, node.y, node.radius, 0, 2 * Math.PI);
-    ctx.fillStyle = node.color;
-    ctx.shadowColor = node.color;
-    ctx.shadowBlur = 12;
-    ctx.fill();
-    ctx.shadowBlur = 0;
+  let row = [];
+  const queue = [...items];
 
-    ctx.strokeStyle = "#FFFFFF";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+  while (queue.length > 0) {
+    const side = Math.min(rect.w, rect.h);
+    if (side <= 0.001) break;
+    const newRow = [...row, queue[0]];
+    if (row.length === 0 || worst(newRow, side) <= worst(row, side)) {
+      row.push(queue.shift());
+    } else {
+      layoutRow(row, side);
+      row = [];
+    }
+  }
 
-    ctx.fillStyle = "#FFFFFF";
-    ctx.font = node.type === 'center' ? "600 12px Inter, sans-serif" : "500 11px Inter, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(node.name.length > 12 ? node.name.slice(0, 11) + '…' : node.name, node.x, node.y + node.radius + 14);
-  });
+  if (row.length > 0) {
+    const side = Math.min(rect.w, rect.h);
+    layoutRow(row, side);
+  }
+
+  container.innerHTML = layout.map(cell => {
+    const icon = cell.type === 'person' ? '👤' : cell.type === 'place' ? '📍' : '🏢';
+    const showIcon = cell.w >= 45 && cell.h >= 45;
+    const showCount = cell.w >= 70 && cell.h >= 55;
+    const isSmall = cell.w < 60 || cell.h < 35;
+    const countText = `${cell.value} ${cell.value === 1 ? 'mention' : 'mentions'}`;
+    const tooltip = `${cell.name} (${cell.type}) · ${countText}. Click to view connected notes.`;
+
+    return `
+      <div class="treemap-cell ${esc(cell.type)}"
+           style="left:${cell.x.toFixed(1)}px; top:${cell.y.toFixed(1)}px; width:${cell.w.toFixed(1)}px; height:${cell.h.toFixed(1)}px;"
+           title="${esc(tooltip)}"
+           tabindex="0"
+           role="button"
+           aria-label="${esc(tooltip)}"
+           onclick="showDossier(${cell.id})"
+           onkeydown="if(event.key==='Enter'||event.key===' ') { event.preventDefault(); showDossier(${cell.id}); }">
+        ${showIcon ? `<span class="treemap-cell-icon" aria-hidden="true">${icon}</span>` : ''}
+        <span class="treemap-cell-name" style="${isSmall ? 'font-size:11px;' : ''}">${esc(cell.name)}</span>
+        ${showCount ? `<span class="treemap-cell-count">${countText}</span>` : ''}
+      </div>
+    `;
+  }).join('');
 }
+
+window.addEventListener('resize', () => {
+  const panel = document.getElementById('panel-entities');
+  if (panel && !panel.hidden && allEntitiesCache && allEntitiesCache.length > 0) {
+    renderEntityTreemap(allEntitiesCache);
+  }
+});
 
 // --- 06 · Smart Cards & Expense Tracker ----------------------------------
 async function loadCards(kindFilter = '') {
@@ -1555,156 +1568,7 @@ async function convertAllNotesToCards() {
   }
 }
 
-// --- 07 · Flashcards & Spaced Repetition Station -------------------------
-let dueFlashcardsList = [];
-let currentCardIndex = 0;
-let isCurrentCardFlipped = false;
-
-async function loadFlashcardsStation() {
-  const metaEl = document.getElementById('flashcardMeta');
-  const contentEl = document.getElementById('flashcardContent');
-  const actionsEl = document.getElementById('flashcardActions');
-  const cardEl = document.getElementById('activeFlashcard');
-  const flipBtn = document.getElementById('flipCardBtn');
-  const forgotBtn = document.getElementById('cardForgotBtn');
-  const rememberedBtn = document.getElementById('cardRememberedBtn');
-  const resurfaceEl = document.getElementById('resurfaceList');
-
-  try {
-    // 1. Load resurfacing items
-    const res = await fetchJson('/api/resurface', {}, 'Failed to load resurfaced items');
-    if (resurfaceEl) {
-      const items = [...(res.on_this_day || []), ...(res.random_discovery || [])];
-      resurfaceEl.innerHTML = items.length ? items.map(it => `
-        <div style="padding:14px; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-card); display:flex; justify-content:space-between; align-items:center;">
-          <div>
-            <div style="font-weight:500; color:var(--text);">${esc(it.title || it.raw_text?.slice(0, 100) || 'Note')}</div>
-            <div class="muted" style="font-size:12px; margin-top:2px;">${esc(it.raw_text?.slice(0, 160) || '')}</div>
-          </div>
-          <span class="mono" style="font-size:11px; color:var(--amber); white-space:nowrap; margin-left:14px;">${it.resurface_reason || 'Rediscovery'}</span>
-        </div>
-      `).join('') : '<div class="muted">No historical resurfacing notes yet.</div>';
-    }
-
-    // 2. Load due flashcards
-    const due = await fetchJson('/api/flashcards/due', {}, 'Failed to load due flashcards');
-    dueFlashcardsList = due;
-    currentCardIndex = 0;
-    isCurrentCardFlipped = false;
-
-    // Update Box counters
-    for (let b = 0; b <= 4; b++) {
-      const countEl = document.getElementById(`box${b}Count`);
-      if (countEl) {
-        countEl.textContent = due.filter(c => c.box === b).length;
-      }
-    }
-
-    if (due.length === 0) {
-      metaEl.textContent = 'All caught up!';
-      contentEl.textContent = 'No flashcards due right now. Click "Generate Flashcards" below to generate study cards from your notes.';
-      actionsEl.hidden = true;
-      cardEl.classList.remove('flipped');
-      return;
-    }
-
-    renderActiveFlashcard();
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-function renderActiveFlashcard() {
-  const metaEl = document.getElementById('flashcardMeta');
-  const contentEl = document.getElementById('flashcardContent');
-  const actionsEl = document.getElementById('flashcardActions');
-  const cardEl = document.getElementById('activeFlashcard');
-  const flipBtn = document.getElementById('flipCardBtn');
-  const forgotBtn = document.getElementById('cardForgotBtn');
-  const rememberedBtn = document.getElementById('cardRememberedBtn');
-
-  if (currentCardIndex >= dueFlashcardsList.length) {
-    metaEl.textContent = 'Session Complete! 🎉';
-    contentEl.textContent = 'You have reviewed all due flashcards for today.';
-    actionsEl.hidden = true;
-    cardEl.classList.remove('flipped');
-    return;
-  }
-
-  const card = dueFlashcardsList[currentCardIndex];
-  isCurrentCardFlipped = false;
-  cardEl.classList.remove('flipped');
-  metaEl.textContent = `Card ${currentCardIndex + 1} of ${dueFlashcardsList.length} · Box ${card.box || 0}`;
-  contentEl.textContent = card.front;
-  actionsEl.hidden = false;
-  flipBtn.hidden = false;
-  forgotBtn.hidden = true;
-  rememberedBtn.hidden = true;
-}
-
-function flipActiveCard() {
-  const card = dueFlashcardsList[currentCardIndex];
-  if (!card) return;
-  const contentEl = document.getElementById('flashcardContent');
-  const cardEl = document.getElementById('activeFlashcard');
-  const flipBtn = document.getElementById('flipCardBtn');
-  const forgotBtn = document.getElementById('cardForgotBtn');
-  const rememberedBtn = document.getElementById('cardRememberedBtn');
-
-  isCurrentCardFlipped = !isCurrentCardFlipped;
-  cardEl.classList.toggle('flipped', isCurrentCardFlipped);
-  if (isCurrentCardFlipped) {
-    contentEl.textContent = card.back;
-    flipBtn.hidden = true;
-    forgotBtn.hidden = false;
-    rememberedBtn.hidden = false;
-  } else {
-    contentEl.textContent = card.front;
-    flipBtn.hidden = false;
-    forgotBtn.hidden = true;
-    rememberedBtn.hidden = true;
-  }
-}
-
-async function reviewActiveCard(remembered) {
-  const card = dueFlashcardsList[currentCardIndex];
-  if (!card) return;
-  try {
-    await fetchJson(`/api/flashcards/${card.id}/review`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ remembered: remembered })
-    });
-    if (window.toast) {
-      window.toast(remembered ? 'Card promoted to next Leitner box! 🚀' : 'Card reset to Box 0 for review tomorrow.');
-    }
-    currentCardIndex++;
-    renderActiveFlashcard();
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-async function generateFlashcardsForAllNotes() {
-  const contentEl = document.getElementById('flashcardContent');
-  contentEl.textContent = 'Generating study flashcards across notes…';
-  try {
-    const items = await fetchJson('/api/items?limit=25', {}, 'Failed to fetch items');
-    let created = 0;
-    for (const it of items) {
-      try {
-        const cards = await fetchJson(`/api/items/${it.id}/flashcards`, { method: 'POST' });
-        created += cards.length;
-      } catch (e) {}
-    }
-    await loadFlashcardsStation();
-    if (window.toast) window.toast(`Generated ${created} flashcards!`);
-  } catch (e) {
-    console.error(e);
-  }
-}
-
-// --- 08 · Developer & MCP Panel -----------------------------------------
+// --- 07 · Developer & MCP Panel -----------------------------------------
 async function loadDeveloperPanel() {
   const tokensListEl = document.getElementById('tokensList');
   const webhooksListEl = document.getElementById('webhooksList');
@@ -1830,6 +1694,5 @@ document.addEventListener('click', (e) => {
   const tabName = tabBtn.dataset.tab;
   if (tabName === 'entities') loadEntities();
   if (tabName === 'cards') loadCards();
-  if (tabName === 'flashcards') loadFlashcardsStation();
   if (tabName === 'developer') loadDeveloperPanel();
 });

@@ -42,10 +42,9 @@
         <button type="button" role="tab" class="tab" id="tab-ask" data-tab="ask" aria-controls="panel-ask" aria-selected="false" tabindex="-1"><span class="tab-no">02</span>Ask<i class="tab-dot" aria-hidden="true"></i></button>
         <button type="button" role="tab" class="tab" id="tab-dashboard" data-tab="dashboard" aria-controls="panel-dashboard" aria-selected="false" tabindex="-1"><span class="tab-no">03</span>Dashboard<i class="tab-dot" aria-hidden="true"></i></button>
         <button type="button" role="tab" class="tab" id="tab-notes" data-tab="notes" aria-controls="panel-notes" aria-selected="false" tabindex="-1"><span class="tab-no">04</span>Notes<i class="tab-dot" aria-hidden="true"></i></button>
-        <button type="button" role="tab" class="tab" id="tab-entities" data-tab="entities" aria-controls="panel-entities" aria-selected="false" tabindex="-1"><span class="tab-no">05</span>Entities & Graph<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-entities" data-tab="entities" aria-controls="panel-entities" aria-selected="false" tabindex="-1"><span class="tab-no">05</span>Entities Treemap<i class="tab-dot" aria-hidden="true"></i></button>
         <button type="button" role="tab" class="tab" id="tab-cards" data-tab="cards" aria-controls="panel-cards" aria-selected="false" tabindex="-1"><span class="tab-no">06</span>Smart Cards<i class="tab-dot" aria-hidden="true"></i></button>
-        <button type="button" role="tab" class="tab" id="tab-flashcards" data-tab="flashcards" aria-controls="panel-flashcards" aria-selected="false" tabindex="-1"><span class="tab-no">07</span>Flashcards<i class="tab-dot" aria-hidden="true"></i></button>
-        <button type="button" role="tab" class="tab" id="tab-developer" data-tab="developer" aria-controls="panel-developer" aria-selected="false" tabindex="-1"><span class="tab-no">08</span>API & MCP<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-developer" data-tab="developer" aria-controls="panel-developer" aria-selected="false" tabindex="-1"><span class="tab-no">07</span>API & MCP<i class="tab-dot" aria-hidden="true"></i></button>
         <span class="tab-indicator" aria-hidden="true"></span>
       </div>
 
@@ -362,13 +361,13 @@
       </div>
     </section>
 
-    <!-- 05 · Entities & Knowledge Graph -->
+    <!-- 05 · Entities Treemap -->
     <section id="panel-entities" class="tab-panel" role="tabpanel" aria-labelledby="tab-entities" data-panel="entities" hidden>
       <div class="wrap band">
-        <div class="eyebrow" data-rev><span class="mono">05 · Knowledge Graph</span></div>
+        <div class="eyebrow" data-rev><span class="mono">05 · Knowledge Treemap</span></div>
         <div class="head">
-          <h2 data-split="words">People & Entities</h2>
-          <p class="sub lede" data-rev>Interactive entity connections extracted across your notes, links, and documents.</p>
+          <h2 data-split="words">People, Places & Organizations Treemap</h2>
+          <p class="sub lede" data-rev>Interactive proportional treemap scaling entities by note frequency. Click any block to view its connected notes & dossier.</p>
         </div>
         <div class="feature-bar">
           <button type="button" class="chip active" onclick="filterEntitiesByType('')">All</button>
@@ -379,10 +378,15 @@
         </div>
         <p id="entitiesStatus" class="status muted" role="status" aria-live="polite"></p>
 
-        <!-- Visual Entity Graph -->
-        <div class="entity-graph-container">
-          <canvas id="entityGraphCanvas" class="entity-canvas"></canvas>
-          <div class="graph-overlay-hint">Interactive Knowledge Map · Drag nodes or click to view details</div>
+        <!-- Interactive Entity Treemap -->
+        <div class="treemap-wrapper">
+          <div class="treemap-legend">
+            <span class="legend-pill person">👤 People</span>
+            <span class="legend-pill place">📍 Places</span>
+            <span class="legend-pill organization">🏢 Organizations</span>
+            <span class="legend-hint">Block area proportional to note mentions · Click any tile to inspect</span>
+          </div>
+          <div id="entityTreemap" class="entity-treemap-container" role="region" aria-label="Entities Treemap"></div>
         </div>
 
         <!-- Entity Dossier Modal / View -->
@@ -435,52 +439,10 @@
       </div>
     </section>
 
-    <!-- 07 · Flashcards & Resurfacing -->
-    <section id="panel-flashcards" class="tab-panel" role="tabpanel" aria-labelledby="tab-flashcards" data-panel="flashcards" hidden>
-      <div class="wrap band">
-        <div class="eyebrow" data-rev><span class="mono">07 · Memory & Retention</span></div>
-        <div class="head">
-          <h2 data-split="words">Spaced Repetition & Resurfacing</h2>
-          <p class="sub lede" data-rev>Active learning Leitner flashcards and "On this day" memory resurfacing.</p>
-        </div>
-
-        <!-- Leitner Box Progress Counter -->
-        <div class="leitner-box-row">
-          <div class="leitner-box-col"><div class="mono eyebrow-sm">Box 0 (1d)</div><div id="box0Count" class="leitner-box-count">0</div></div>
-          <div class="leitner-box-col"><div class="mono eyebrow-sm">Box 1 (3d)</div><div id="box1Count" class="leitner-box-count">0</div></div>
-          <div class="leitner-box-col"><div class="mono eyebrow-sm">Box 2 (7d)</div><div id="box2Count" class="leitner-box-count">0</div></div>
-          <div class="leitner-box-col"><div class="mono eyebrow-sm">Box 3 (14d)</div><div id="box3Count" class="leitner-box-count">0</div></div>
-          <div class="leitner-box-col"><div class="mono eyebrow-sm">Box 4 (30d)</div><div id="box4Count" class="leitner-box-count">0</div></div>
-        </div>
-
-        <!-- Active Flashcard Review Station -->
-        <div class="flashcard-stage">
-          <div id="activeFlashcard" class="flashcard">
-            <div id="flashcardMeta" class="mono" style="font-size:11px; color:var(--muted)">Cards Due for Review</div>
-            <div id="flashcardContent" class="flashcard-prompt">No cards due today. Click "Generate Flashcards" below to make study cards from your notes!</div>
-            <div id="flashcardActions" class="flashcard-actions" hidden>
-              <button type="button" id="flipCardBtn" class="secondary" onclick="flipActiveCard()">Flip Card</button>
-              <button type="button" id="cardForgotBtn" class="danger" onclick="reviewActiveCard(false)" hidden>❌ Forgot (Box 0)</button>
-              <button type="button" id="cardRememberedBtn" class="magnetic" onclick="reviewActiveCard(true)" hidden>✅ Remembered (+1 Box)</button>
-            </div>
-          </div>
-          <div style="text-align:center; margin-top:14px;">
-            <button type="button" class="secondary" onclick="generateFlashcardsForAllNotes()">🗂️ Generate Flashcards from Notes</button>
-          </div>
-        </div>
-
-        <!-- Resurfacing Shelf -->
-        <div style="margin-top:40px;">
-          <h3 style="font-size:1.15rem; color:var(--text); margin-bottom:12px;">🕒 On This Day & Rediscovery</h3>
-          <div id="resurfaceList" class="resurface-shelf"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- 08 · API & MCP Connector -->
+    <!-- 07 · API & MCP Connector -->
     <section id="panel-developer" class="tab-panel" role="tabpanel" aria-labelledby="tab-developer" data-panel="developer" hidden>
       <div class="wrap band">
-        <div class="eyebrow" data-rev><span class="mono">08 · Developer & Integrations</span></div>
+        <div class="eyebrow" data-rev><span class="mono">07 · Developer & Integrations</span></div>
         <div class="head">
           <h2 data-split="words">Public API, Webhooks & MCP Server</h2>
           <p class="sub lede" data-rev>Connect external AI agents (Claude Desktop, Cursor, Gemini) and automate inbox workflows.</p>
@@ -569,10 +531,10 @@
 
         <div class="tour-item">
           <div class="tour-item-info">
-            <strong>👤 People & Entities Knowledge Graph</strong>
-            <span>Extracts people, places, and organizations with an interactive graph and dossier page for everyone you know.</span>
+            <strong>👤 People & Entities Treemap</strong>
+            <span>Visual treemap scaling entities by note frequency. Click any block to view its connected notes & dossier.</span>
           </div>
-          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-entities').click()">View Graph</button>
+          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-entities').click()">View Treemap</button>
         </div>
 
         <div class="tour-item">
@@ -581,14 +543,6 @@
             <span>Search with completely different words (e.g. "teeth checkup" finds dentist notes) via local embeddings.</span>
           </div>
           <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-ask').click()">Try Ask</button>
-        </div>
-
-        <div class="tour-item">
-          <div class="tour-item-info">
-            <strong>🗂️ Leitner Flashcards & Resurfacing</strong>
-            <span>Active learning with 5-box spaced repetition and "On this day" historical recall.</span>
-          </div>
-          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-flashcards').click()">Study Cards</button>
         </div>
 
         <div class="tour-item">
