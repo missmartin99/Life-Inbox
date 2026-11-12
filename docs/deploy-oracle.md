@@ -169,3 +169,35 @@ docker compose exec db pg_dump -U lifeinbox lifeinbox > backup-$(date +%F).sql
 | `Set SITE_PASSWORD_HASH in .env` | `.env` missing or the variable name is misspelled |
 | Login prompt rejects the password | The hash lost its `$` signs: put it in single quotes in `.env` |
 | 401 `Invalid API token` | Token revoked or mistyped; create a new one |
+
+## Sharing a VM that already runs Caddy
+
+If the VM already serves another app with its own Caddy on ports 80/443 (so
+the Caddy in step 5 can't start), run Life Inbox without its own proxy and add
+one site block to the existing Caddy instead:
+
+```bash
+# PROXY_NETWORK = the existing Caddy's Docker network (docker network ls)
+echo "PROXY_NETWORK=eka_default" >> .env
+docker compose -p life-inbox -f docker-compose.yml -f deploy/docker-compose.shared.yml up -d --build
+```
+
+Append to the existing Caddyfile (`>>` keeps the same file, which matters for
+Docker bind mounts), then reload Caddy without downtime:
+
+```
+life-inbox.140-238-1-2.sslip.io {
+	@needs_password not header Authorization "Bearer li_*"
+	basic_auth @needs_password {
+		team <hash from caddy hash-password>
+	}
+	reverse_proxy life-inbox-web:8000
+}
+```
+
+```bash
+docker exec <caddy-container> caddy reload --config /etc/caddy/Caddyfile
+```
+
+`caddy reload` checks the new config first; if it is invalid, the old one
+keeps running.

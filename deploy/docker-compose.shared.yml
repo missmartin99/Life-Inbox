@@ -1,0 +1,27 @@
+# Run Life Inbox on a VM that ALREADY has a Caddy (or other proxy) on 80/443.
+#
+#   docker compose -p life-inbox -f docker-compose.yml -f deploy/docker-compose.shared.yml up -d --build
+#
+# Life Inbox publishes no ports. Its web container joins the existing proxy's
+# Docker network as "life-inbox-web", and the existing Caddy forwards one
+# hostname to it (see "Sharing a VM" in docs/deploy-oracle.md).
+services:
+  web:
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+    ports: !reset []
+    networks:
+      default:
+      proxy:
+        aliases: [life-inbox-web]
+
+  db:
+    restart: unless-stopped
+    ports: !reset []
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:-eka_default}
