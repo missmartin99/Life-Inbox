@@ -22,7 +22,11 @@ from app.capture.voice_extract import process_voice_bytes, validate_audio_upload
 from app.privacy import redact
 from app.item_kinds import KIND_FIELDS, make_card
 from app.expenses import expense_summary
+from app.entities import ENTITY_TYPES, extract_entities
 from app.database import (
+    get_entity_page,
+    list_entities,
+    save_item_entities,
     list_items_by_kind,
     save_item_card,
     list_ai_call_log,
@@ -1095,6 +1099,37 @@ def get_expenses(month: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$")):
     POST /api/items/{id}/card on a photo or note of a bill.
     """
     return expense_summary(list_items_by_kind("receipt"), month=month)
+
+
+# --- People & entities ------------------------------------------------------
+
+
+@app.post("/api/items/{item_id}/entities")
+def find_item_entities(item_id: int):
+    """Find the people, places and organizations in one item and save them."""
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    text = item["extracted_text"] or item["raw_text"] or item["title"] or ""
+    entities = extract_entities(text, is_sensitive=item["is_sensitive"])
+    return save_item_entities(item_id, entities)
+
+
+@app.get("/api/entities")
+def get_entities(type: Optional[str] = Query(None)):
+    """All entities with how many items mention them (?type=person)."""
+    if type is not None and type not in ENTITY_TYPES:
+        raise HTTPException(status_code=400, detail="Unknown entity type")
+    return list_entities(type)
+
+
+@app.get("/api/entities/{entity_id}")
+def get_entity(entity_id: int):
+    """ "Everything about X": the entity and every item that mentions it."""
+    page = get_entity_page(entity_id)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return page
 
 
 # --- Privacy --------------------------------------------------------------

@@ -20,6 +20,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    delete,
     event,
     func,
     or_,
@@ -124,6 +125,38 @@ class InboxItemRecord(Base):
     # if not checked yet) and its fields stored as JSON text.
     kind = Column(Text, nullable=True)
     kind_fields = Column(Text, nullable=True)
+
+
+class EntityRecord(Base):
+    """A person, place or organization mentioned in the inbox (stored once)."""
+
+    __tablename__ = "entities"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id", "entity_type", "name_key", name="uq_entities_owner_type_name"
+        ),
+        {"sqlite_autoincrement": True},
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    name = Column(Text, nullable=False)
+    name_key = Column(Text, nullable=False)  # lower-case name, for matching
+    entity_type = Column(Text, nullable=False)  # person | place | organization
+    created_at = Column(Text, nullable=False)
+
+
+class ItemEntityRecord(Base):
+    """Link table: which items mention which entities (many-to-many)."""
+
+    __tablename__ = "item_entities"
+
+    item_id = Column(
+        Integer, ForeignKey("inbox_items.id", ondelete="CASCADE"), primary_key=True
+    )
+    entity_id = Column(
+        Integer, ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True
+    )
 
 
 class AiCallLogRecord(Base):
@@ -1977,3 +2010,87 @@ def list_items_by_kind(kind: Optional[str] = None) -> list:
             query = query.where(InboxItemRecord.kind == kind)
         query = query.order_by(InboxItemRecord.id.desc())
         return [_item_to_dict(item) for item in session.scalars(query)]
+
+
+# ---------------------------------------------------------------------------
+# People & entities
+# ---------------------------------------------------------------------------
+
+
+def _entity_to_dict(entity: EntityRecord, item_count: Optional[int] = None) -> dict:
+    data = {"id": entity.id, "name": entity.name, "type": entity.entity_type}
+    if item_count is not None:
+        data["item_count"] = item_count
+    return data
+
+
+def save_item_entities(item_id: int, entities: list) -> Optional[list]:
+    """Replace the entities linked to one item. Reuses existing entity rows."""
+    owner_id = require_owner_id()
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None or item.owner_user_id != owner_id:
+            return None
+
+        # Start fresh for this item, so re-running never leaves stale links.
+        session.execute(delete(ItemEntityRecord).where(ItemEntityRecord.item_id == item_id))
+
+        saved = []
+        for found in entities:
+            entity = session.scalars(
+                select(EntityRecord).where(
+                    EntityRecord.owner_user_id == owner_id,
+                    EntityRecord.entity_type == found["type"],
+                    EntityRecord.name_key == found["name"].lower(),
+                )
+            ).first()
+            if entity is None:
+                entity = EntityRecord(
+                    owner_user_id=owner_id,
+                    name=found["name"],
+                    name_key=found["name"].lower(),
+                    entity_type=found["type"],
+                    created_at=now,
+                )
+                session.add(entity)
+                session.flush()  # gives the new entity its id
+            session.add(ItemEntityRecord(item_id=item_id, entity_id=entity.id))
+            saved.append(_entity_to_dict(entity))
+        session.commit()
+        return saved
+
+
+def list_entities(entity_type: Optional[str] = None) -> list:
+    """Entities that appear in at least one item, most-mentioned first."""
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        item_count = func.count(ItemEntityRecord.item_id)
+        query = (
+            select(EntityRecord, item_count)
+            .join(ItemEntityRecord, ItemEntityRecord.entity_id == EntityRecord.id)
+            .where(EntityRecord.owner_user_id == owner_id)
+            .group_by(EntityRecord.id)
+            .order_by(item_count.desc(), EntityRecord.name)
+        )
+        if entity_type:
+            query = query.where(EntityRecord.entity_type == entity_type)
+        return [_entity_to_dict(e, count) for e, count in session.execute(query)]
+
+
+def get_entity_page(entity_id: int) -> Optional[dict]:
+    """One entity plus every item that mentions it, newest first."""
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        entity = session.get(EntityRecord, entity_id)
+        if entity is None or entity.owner_user_id != owner_id:
+            return None
+        items = session.scalars(
+            select(InboxItemRecord)
+            .join(ItemEntityRecord, ItemEntityRecord.item_id == InboxItemRecord.id)
+            .where(ItemEntityRecord.entity_id == entity_id)
+            .order_by(InboxItemRecord.id.desc())
+        )
+        page = _entity_to_dict(entity)
+        page["items"] = [_item_to_dict(item) for item in items]
+        return page

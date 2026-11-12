@@ -184,6 +184,18 @@ are found with simple patterns (`₹1,250`, `Rs. 300`, `05/11/2026`).
 
 Receipts need no extra table: their fields live in `inbox_items.kind_fields`.
 
+### People and entities
+
+`app/entities.py` finds the people, places and organizations an item
+mentions. Each entity is stored once in `entities` and linked to items through
+`item_entities` (many-to-many), so you can open "everything about Dr. Mehta".
+Without AI (or for sensitive items) only people are found, from clues like
+"Dr. Mehta" or "call Priya".
+
+- `POST /api/items/{id}/entities` finds and saves the entities for one item;
+- `GET /api/entities?type=person` lists entities, most-mentioned first;
+- `GET /api/entities/{id}` returns the entity and every item that mentions it.
+
 ## 4. Optional: configure OpenAI
 
 If you want AI analysis instead of the local fallback, set your API key in the
