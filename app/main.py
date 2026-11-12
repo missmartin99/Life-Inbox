@@ -35,7 +35,7 @@ from app.capture.voice_extract import process_voice_bytes, validate_audio_upload
 from app.privacy import redact
 from app.item_kinds import KIND_FIELDS, make_card
 from app.expenses import expense_summary
-from app.entities import ENTITY_TYPES, extract_entities
+from app.entities import ENTITY_TYPES, extract_entities, summarize_entity
 from app.attention import dates as attention_dates
 from app.flashcards import make_cards, next_review
 from app.resurface import resurface
@@ -1260,11 +1260,14 @@ def find_item_entities(item_id: int):
 
 
 @app.get("/api/entities")
-def get_entities(type: Optional[str] = Query(None)):
-    """All entities with how many items mention them (?type=person)."""
+def get_entities(
+    type: Optional[str] = Query(None),
+    days: Optional[int] = Query(None, ge=1, le=3650),
+):
+    """All entities with how many items mention them (?type=person&days=30)."""
     if type is not None and type not in ENTITY_TYPES:
         raise HTTPException(status_code=400, detail="Unknown entity type")
-    return list_entities(type)
+    return list_entities(type, days=days)
 
 
 @app.get("/api/entities/{entity_id}")
@@ -1274,6 +1277,21 @@ def get_entity(entity_id: int):
     if page is None:
         raise HTTPException(status_code=404, detail="Entity not found")
     return page
+
+
+@app.get("/api/entities/{entity_id}/summary")
+def get_entity_summary(entity_id: int):
+    """AI-synthesized profile dossier summary for an entity from its connected items."""
+    page = get_entity_page(entity_id)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    summary = summarize_entity(page["name"], page["type"], page.get("items", []))
+    return {
+        "entity_id": entity_id,
+        "name": page["name"],
+        "type": page["type"],
+        "summary": summary,
+    }
 
 
 # --- Resurfacing and flashcards ---------------------------------------------

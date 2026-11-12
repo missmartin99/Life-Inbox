@@ -164,3 +164,27 @@ def test_errors(client):
     assert client.post("/api/items/999/entities").status_code == 404
     assert client.get("/api/entities/999").status_code == 404
     assert client.get("/api/entities?type=planet").status_code == 400
+    assert client.get("/api/entities/999/summary").status_code == 404
+
+
+def test_entity_summary_and_time_filter(client):
+    item1 = add(client, "Visited Dr. Mehta for annual general checkup")
+    item2 = add(client, "Follow up call with Dr. Mehta regarding blood test")
+    client.post(f"/api/items/{item1['id']}/entities")
+    client.post(f"/api/items/{item2['id']}/entities")
+
+    # Time filter test
+    entities_30d = client.get("/api/entities?days=30").json()
+    assert len(entities_30d) == 1
+    assert entities_30d[0]["name"] == "Dr. Mehta"
+    assert entities_30d[0]["item_count"] == 2
+
+    # Summary test
+    entity_id = entities_30d[0]["id"]
+    res = client.get(f"/api/entities/{entity_id}/summary")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["name"] == "Dr. Mehta"
+    assert "Dr. Mehta" in data["summary"]
+    assert "person" in data["summary"]
+

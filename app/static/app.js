@@ -1241,23 +1241,33 @@ window.addEventListener('popstate', () => {
 // --- 05 · Entities Treemap -----------------------------------------------
 let allEntitiesCache = [];
 let currentEntityTypeFilter = '';
+let currentEntityPeriod = null;
+let currentDossierEntityId = null;
 
-async function loadEntities(typeFilter = '') {
-  currentEntityTypeFilter = typeFilter;
+async function loadEntities(typeFilter = undefined, periodFilter = undefined) {
+  if (typeFilter !== undefined) currentEntityTypeFilter = typeFilter;
+  if (periodFilter !== undefined) currentEntityPeriod = periodFilter;
+
   const statusEl = document.getElementById('entitiesStatus');
   const listEl = document.getElementById('entitiesList');
   if (!listEl) return;
   try {
-    const url = typeFilter ? `/api/entities?type=${encodeURIComponent(typeFilter)}` : '/api/entities';
+    const params = new URLSearchParams();
+    if (currentEntityTypeFilter) params.append('type', currentEntityTypeFilter);
+    if (currentEntityPeriod) params.append('days', currentEntityPeriod);
+    const qs = params.toString();
+    const url = qs ? `/api/entities?${qs}` : '/api/entities';
+
     const entities = await fetchJson(url, {}, 'Failed to load entities');
     allEntitiesCache = entities;
     if (entities.length === 0) {
-      statusEl.textContent = 'No entities discovered yet. Click "Extract Entities from All Notes" to analyze your inbox!';
+      statusEl.textContent = 'No entities found for this filter & timeframe. Try expanding the time period or clearing filters.';
       listEl.innerHTML = '';
       renderEntityTreemap([]);
       return;
     }
-    statusEl.textContent = `Visualizing ${entities.length} entities scaled by note mentions:`;
+    const periodLabel = currentEntityPeriod ? ` (past ${currentEntityPeriod} days)` : ' (all time)';
+    statusEl.textContent = `Visualizing ${entities.length} entities scaled by note mentions${periodLabel}:`;
     listEl.innerHTML = entities.map(ent => `
       <div class="entity-card" onclick="showDossier(${ent.id})">
         <div class="entity-card-head">
@@ -1276,17 +1286,30 @@ async function loadEntities(typeFilter = '') {
 }
 
 function filterEntitiesByType(type) {
-  document.querySelectorAll('#panel-entities .feature-bar .chip').forEach(btn => {
+  document.querySelectorAll('.entity-type-chip').forEach(btn => {
     btn.classList.toggle('active', btn.textContent.toLowerCase().includes(type) || (!type && btn.textContent === 'All'));
   });
-  loadEntities(type);
+  loadEntities(type, undefined);
+}
+
+function filterEntitiesByPeriod(days) {
+  document.querySelectorAll('.entity-time-chip').forEach(btn => {
+    if (days === null) {
+      btn.classList.toggle('active', btn.textContent.includes('All'));
+    } else {
+      btn.classList.toggle('active', btn.textContent.includes(String(days)) || (days === 365 && btn.textContent.includes('1 Year')));
+    }
+  });
+  loadEntities(undefined, days);
 }
 
 async function showDossier(entityId) {
+  currentDossierEntityId = entityId;
   const dossierEl = document.getElementById('entityDossier');
   const titleEl = document.getElementById('dossierTitle');
   const typeEl = document.getElementById('dossierType');
   const itemsEl = document.getElementById('dossierItems');
+  const summaryEl = document.getElementById('dossierSummaryText');
   if (!dossierEl) return;
 
   try {
@@ -1295,6 +1318,10 @@ async function showDossier(entityId) {
     titleEl.textContent = `Dossier: ${data.name}`;
     typeEl.innerHTML = `<span class="feature-badge ${data.type}">${data.type.toUpperCase()}</span>`;
     
+    if (summaryEl) {
+      summaryEl.textContent = 'Synthesizing profile summary from connected notes…';
+    }
+
     if (!data.items || data.items.length === 0) {
       itemsEl.innerHTML = '<div class="muted">No items explicitly linked yet.</div>';
     } else {
@@ -1307,14 +1334,45 @@ async function showDossier(entityId) {
       `).join('');
     }
     dossierEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    // Fetch AI Summary asynchronously
+    fetchJson(`/api/entities/${entityId}/summary`, {}, 'Failed to fetch summary')
+      .then(res => {
+        if (summaryEl && currentDossierEntityId === entityId) {
+          summaryEl.textContent = res.summary;
+        }
+      })
+      .catch(() => {
+        if (summaryEl && currentDossierEntityId === entityId) {
+          summaryEl.textContent = 'Could not generate summary at this moment.';
+        }
+      });
   } catch (e) {
     console.error(e);
+  }
+}
+
+async function refreshDossierSummary() {
+  if (!currentDossierEntityId) return;
+  const summaryEl = document.getElementById('dossierSummaryText');
+  const btn = document.getElementById('refreshSummaryBtn');
+  if (summaryEl) summaryEl.textContent = 'Synthesizing updated profile summary…';
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await fetchJson(`/api/entities/${currentDossierEntityId}/summary`, {}, 'Failed to refresh summary');
+    if (summaryEl) summaryEl.textContent = res.summary;
+  } catch {
+    if (summaryEl) summaryEl.textContent = 'Failed to generate updated summary.';
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
 function closeDossier() {
   const dossierEl = document.getElementById('entityDossier');
   if (dossierEl) dossierEl.hidden = true;
+  currentDossierEntityId = null;
 }
 
 async function scanAllNotesForEntities() {

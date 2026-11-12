@@ -1582,6 +1582,25 @@ label { display: grid; gap: 6px; font-size: 12px; color: var(--text-3); letter-s
   border: 1px solid var(--indigo);
   border-radius: var(--radius-card);
 }
+.dossier-ai-card {
+  margin-top: 14px;
+  padding: 16px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(34, 211, 238, 0.06));
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: var(--radius-inner);
+}
+.dossier-ai-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.dossier-summary-body {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text);
+  margin: 0;
+}
 .dossier-items-list {
   display: flex;
   flex-direction: column;

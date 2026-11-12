@@ -3,7 +3,7 @@ import json
 import os
 import re
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -2132,8 +2132,11 @@ def save_item_entities(item_id: int, entities: list) -> Optional[list]:
         return saved
 
 
-def list_entities(entity_type: Optional[str] = None) -> list:
-    """Entities that appear in at least one item, most-mentioned first."""
+def list_entities(entity_type: Optional[str] = None, days: Optional[int] = None) -> list:
+    """Entities that appear in at least one item, most-mentioned first.
+    
+    If days is given, only counts items created within the past `days` days.
+    """
     owner_id = require_owner_id()
     with SessionLocal() as session:
         item_count = func.count(ItemEntityRecord.item_id)
@@ -2141,9 +2144,13 @@ def list_entities(entity_type: Optional[str] = None) -> list:
             select(EntityRecord, item_count)
             .join(ItemEntityRecord, ItemEntityRecord.entity_id == EntityRecord.id)
             .where(EntityRecord.owner_user_id == owner_id)
-            .group_by(EntityRecord.id)
-            .order_by(item_count.desc(), EntityRecord.name)
         )
+        if days is not None:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            query = query.join(
+                InboxItemRecord, ItemEntityRecord.item_id == InboxItemRecord.id
+            ).where(InboxItemRecord.created_at >= cutoff)
+        query = query.group_by(EntityRecord.id).order_by(item_count.desc(), EntityRecord.name)
         if entity_type:
             query = query.where(EntityRecord.entity_type == entity_type)
         return [_entity_to_dict(e, count) for e, count in session.execute(query)]

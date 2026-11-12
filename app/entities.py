@@ -110,3 +110,70 @@ def extract_entities(text, is_sensitive=False):
     except Exception:
         logger.warning("Entity extraction failed; using fallback", exc_info=True)
     return fallback_entities(text)
+
+
+def fallback_entity_summary(entity_name: str, entity_type: str, items: list) -> str:
+    """Fast, local summary synthesized from timeline and recurring themes."""
+    count = len(items)
+    if count == 0:
+        return f"No recorded notes mention {entity_name} yet."
+    dates = [it.get("created_at")[:10] for it in items if it.get("created_at")]
+    first_date = min(dates) if dates else "unknown date"
+    latest_date = max(dates) if dates else "unknown date"
+
+    item_types = sorted(set(it.get("item_type") for it in items if it.get("item_type")))
+    type_str = ", ".join(item_types) if item_types else "notes"
+
+    time_span = f"on {first_date}" if first_date == latest_date else f"between {first_date} and {latest_date}"
+
+    sample = ""
+    for it in items:
+        snippet = (it.get("title") or it.get("raw_text") or "").strip()
+        if snippet:
+            sample = snippet[:70].strip() + ("…" if len(snippet) > 70 else "")
+            break
+    sample_text = f" Context includes: \"{sample}\"" if sample else ""
+    return f"{entity_name} is a {entity_type} referenced across {count} {type_str} {time_span}.{sample_text}"
+
+
+def summarize_entity(entity_name: str, entity_type: str, items: list) -> str:
+    """Synthesize a concise executive dossier summary of an entity from its items."""
+    if not items:
+        return f"No recorded notes mention {entity_name} yet."
+
+    has_sensitive = any(item.get("is_sensitive") for item in items)
+    if has_sensitive or not ai_is_configured():
+        return fallback_entity_summary(entity_name, entity_type, items)
+
+    snippets = []
+    for it in items[:15]:
+        text = (it.get("extracted_text") or it.get("raw_text") or it.get("title") or "").strip()
+        if text:
+            created = (it.get("created_at") or "")[:10]
+            snippets.append(f"- [{created}] {text[:200]}")
+
+    if not snippets:
+        return fallback_entity_summary(entity_name, entity_type, items)
+
+    prompt = f"""Synthesize a concise 2-3 sentence executive dossier summary for the {entity_type} "{entity_name}" based on the user's notes below.
+
+Entity: {entity_name} ({entity_type})
+Total notes: {len(items)}
+
+Notes mentioning this entity:
+{chr(10).join(snippets[:10])}
+
+Requirements:
+- Summarize who/what this {entity_type} is in the context of the user's life (physician, close friend, client, frequent location, store, etc.).
+- Highlight key recurring topics, commitments, or patterns.
+- Keep it factual, objective, and under 60 words. No intro or greetings.
+"""
+    try:
+        reply = ask_ai(prompt, feature="entity_summary")
+        if reply and len(reply.strip()) > 15:
+            return reply.strip()
+    except Exception:
+        logger.warning(f"Entity summary failed for {entity_name}; using fallback", exc_info=True)
+
+    return fallback_entity_summary(entity_name, entity_type, items)
+

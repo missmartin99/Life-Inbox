@@ -369,12 +369,25 @@
           <h2 data-split="words">People, Places & Organizations Treemap</h2>
           <p class="sub lede" data-rev>Interactive proportional treemap scaling entities by note frequency. Click any block to view its connected notes & dossier.</p>
         </div>
-        <div class="feature-bar">
-          <button type="button" class="chip active" onclick="filterEntitiesByType('')">All</button>
-          <button type="button" class="chip" onclick="filterEntitiesByType('person')">👤 People</button>
-          <button type="button" class="chip" onclick="filterEntitiesByType('place')">📍 Places</button>
-          <button type="button" class="chip" onclick="filterEntitiesByType('organization')">🏢 Organizations</button>
-          <button type="button" class="secondary" style="margin-left:auto" onclick="scanAllNotesForEntities()">⚡ Extract Entities from All Notes</button>
+        <div class="feature-bar" style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span class="mono eyebrow-sm" style="color:var(--text-3)">Type:</span>
+            <button type="button" class="chip active entity-type-chip" onclick="filterEntitiesByType('')">All</button>
+            <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('person')">👤 People</button>
+            <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('place')">📍 Places</button>
+            <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('organization')">🏢 Organizations</button>
+          </div>
+
+          <div style="display:flex; align-items:center; gap:6px; margin-left:8px;">
+            <span class="mono eyebrow-sm" style="color:var(--text-3)">Timeframe:</span>
+            <button type="button" class="chip active entity-time-chip" onclick="filterEntitiesByPeriod(null)">All Time</button>
+            <button type="button" class="chip entity-time-chip" onclick="filterEntitiesByPeriod(7)">7 Days</button>
+            <button type="button" class="chip entity-time-chip" onclick="filterEntitiesByPeriod(30)">30 Days</button>
+            <button type="button" class="chip entity-time-chip" onclick="filterEntitiesByPeriod(90)">90 Days</button>
+            <button type="button" class="chip entity-time-chip" onclick="filterEntitiesByPeriod(365)">1 Year</button>
+          </div>
+
+          <button type="button" class="secondary" style="margin-left:auto" onclick="scanAllNotesForEntities()">⚡ Extract Entities</button>
         </div>
         <p id="entitiesStatus" class="status muted" role="status" aria-live="polite"></p>
 
@@ -392,11 +405,28 @@
         <!-- Entity Dossier Modal / View -->
         <div id="entityDossier" class="dossier-panel" hidden>
           <div style="display:flex; justify-content:space-between; align-items:center;">
-            <h3 id="dossierTitle" style="font-size:1.3rem; font-weight:600; color:var(--text);"></h3>
+            <div>
+              <h3 id="dossierTitle" style="font-size:1.35rem; font-weight:600; color:var(--text);"></h3>
+              <div id="dossierType" style="margin:4px 0 0;"></div>
+            </div>
             <button type="button" class="secondary icon-btn" onclick="closeDossier()" title="Close">&times;</button>
           </div>
-          <div id="dossierType" style="margin:4px 0 12px;"></div>
-          <div class="mono" style="font-size:12px; color:var(--muted)">Connected Notes & Mention History:</div>
+
+          <!-- AI Profile & Timeline Summary Card -->
+          <div class="dossier-ai-card">
+            <div class="dossier-ai-head">
+              <span class="mono eyebrow-sm" style="color:var(--indigo-text); display:flex; align-items:center; gap:6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                AI Profile & Timeline Synthesis
+              </span>
+              <button type="button" class="secondary" id="refreshSummaryBtn" onclick="refreshDossierSummary()" style="font-size:11px; padding:2px 8px;">✨ Refresh Summary</button>
+            </div>
+            <p id="dossierSummaryText" class="dossier-summary-body">
+              Synthesizing profile summary from connected notes…
+            </p>
+          </div>
+
+          <div class="mono" style="font-size:12px; color:var(--muted); margin-top:16px;">Connected Notes & Mention History:</div>
           <div id="dossierItems" class="dossier-items-list"></div>
         </div>
 
