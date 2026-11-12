@@ -215,7 +215,11 @@ Evidence (JSON):
     from openai import OpenAI
 
     client = OpenAI()
-    response = client.responses.create(model=ASK_MODEL, input=prompt)
+    response = client.responses.create(
+        model=ASK_MODEL,
+        input=prompt,
+        max_output_tokens=int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "8000")),
+    )
     raw = getattr(response, "output_text", None)
     if not isinstance(raw, str) or not raw.strip():
         return None

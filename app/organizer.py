@@ -253,7 +253,11 @@ Saved notes:
 {json.dumps(compact_notes, ensure_ascii=False)}
 """
 
-        response = client.responses.create(model=MODEL, input=prompt)
+        response = client.responses.create(
+            model=MODEL,
+            input=prompt,
+            max_output_tokens=int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "8000")),
+        )
         result = extract_json_object(response.output_text)
         result["mode"] = "openai"
         return validate_analysis_result(result, notes)
