@@ -13,18 +13,19 @@ Open http://127.0.0.1:8000
 
 ## Core smoke (Milestone 1+)
 
-- [ ] Home page loads with capture box, analyze button, tasks, notes
+- [ ] Home page loads with the Capture, Ask, Dashboard and Notes tabs (no Tasks tab)
 - [ ] Save a note → appears under Raw saved notes
 - [ ] Edit a note → text updates; analysis status becomes stale if prior analysis existed
 - [ ] Delete a note → removed; linked orphan task disappears after analyze+delete
-- [ ] Landing page "Analyze Entire Inbox with AI" → analyzes every note
-- [ ] AI Inbox page "Analyze the entire notes with AI" → analyzes every note
-- [ ] AI Inbox page "Analyze new notes" → buckets, todos, priority view, mode shown
-- [ ] Add two more notes, "Analyze new notes" → only those two are analyzed; earlier notes keep their results
-- [ ] "Analyze new notes" again with nothing new → "No new notes to analyze"
+- [ ] Save a note → "Organizing your new note with AI…" then "Organized with AI." with no button click; its ToDos appear on the Dashboard under Open Tasks and it appears on the Dashboard
+- [ ] Save three notes quickly → all three get organized, none twice
+- [ ] Edit a note → it is organized again
+- [ ] Save a link, PDF, image or voice note → organized automatically once processing finishes
+- [ ] There is no AI Inbox tab and no "Analyze" button on the landing page
+- [ ] Save a note with a task due "the 30th", "20th of this month" or "21/11/26" lands in Upcoming (or Overdue once the date has passed); Ask "what is coming up" lists it, and nothing asks you to confirm the date
+- [ ] A task due "12:15 pm today" is in Today before 12:15 and moves to Overdue after it (check with Ask "what is overdue")
+- [ ] Ask "what do I have to do today" → lists every task due today plus overdue ones, with times; Ask "what is overdue", "what is due tomorrow", "what is coming up" → each lists the matching tasks
 - [ ] Reload page → latest analysis restored; tasks persist
-- [ ] Complete / dismiss / reopen a task; filter by status
-- [ ] Re-analyze after completing a task → task status unchanged
 - [ ] Search/filter notes; Clear resets filters
 - [ ] With >100 notes, “Load more” appears and appends
 - [ ] After editing inbox post-analysis, stale banner / status appears
@@ -36,7 +37,6 @@ Open http://127.0.0.1:8000
 - [ ] Dashboard shows Topics, High Priority, Open Tasks, Recently Captured, Needs Review, Related
 - [ ] Add a custom topic from the Topics form
 - [ ] Multi-action note creates multiple tasks from one source
-- [ ] Confirm date on a task → labeled confirmed; survives re-analyze
 - [ ] Near-duplicate notes appear under Related Items; dismiss removes them from the active list
 - [ ] `PATCH /api/items/{id}/insight` user title/topic/priority survives re-analysis
 

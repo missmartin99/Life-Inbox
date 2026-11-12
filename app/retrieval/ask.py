@@ -9,6 +9,7 @@ from typing import Optional
 
 from app.organizer import extract_json_object
 from app.retrieval.search import RankedPassage, search_passages
+from app.retrieval.task_questions import answer_task_question
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +238,17 @@ def build_grounded_answer(
     limit: int = 5,
     item_type: Optional[str] = None,
 ) -> dict:
+    # "What do I have to do today?" is answered from the task board, which
+    # lists every matching task; note search would only find a few of them.
+    if item_type is None:
+        try:
+            task_answer = answer_task_question(question)
+        except Exception:
+            logger.exception("Task-board answer failed; searching notes instead")
+            task_answer = None
+        if task_answer is not None:
+            return task_answer
+
     ranked = search_passages(
         question,
         limit=limit,

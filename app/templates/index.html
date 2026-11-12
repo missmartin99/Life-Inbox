@@ -41,9 +41,7 @@
         <button type="button" role="tab" class="tab" id="tab-capture" data-tab="capture" aria-controls="panel-capture" aria-selected="true"><span class="tab-no">01</span>Capture<i class="tab-dot" aria-hidden="true"></i></button>
         <button type="button" role="tab" class="tab" id="tab-ask" data-tab="ask" aria-controls="panel-ask" aria-selected="false" tabindex="-1"><span class="tab-no">02</span>Ask<i class="tab-dot" aria-hidden="true"></i></button>
         <button type="button" role="tab" class="tab" id="tab-dashboard" data-tab="dashboard" aria-controls="panel-dashboard" aria-selected="false" tabindex="-1"><span class="tab-no">03</span>Dashboard<i class="tab-dot" aria-hidden="true"></i></button>
-        <button type="button" role="tab" class="tab" id="tab-ai" data-tab="ai" aria-controls="panel-ai" aria-selected="false" tabindex="-1"><span class="tab-no">04</span>AI Inbox<i class="tab-dot" aria-hidden="true"></i></button>
-        <button type="button" role="tab" class="tab" id="tab-tasks" data-tab="tasks" aria-controls="panel-tasks" aria-selected="false" tabindex="-1"><span class="tab-no">05</span>Tasks<i class="tab-dot" aria-hidden="true"></i></button>
-        <button type="button" role="tab" class="tab" id="tab-notes" data-tab="notes" aria-controls="panel-notes" aria-selected="false" tabindex="-1"><span class="tab-no">06</span>Notes<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-notes" data-tab="notes" aria-controls="panel-notes" aria-selected="false" tabindex="-1"><span class="tab-no">04</span>Notes<i class="tab-dot" aria-hidden="true"></i></button>
         <span class="tab-indicator" aria-hidden="true"></span>
       </div>
 
@@ -237,7 +235,6 @@
           <p id="noteStatus" class="status muted composer-status" role="status" aria-live="polite"></p>
 
           <div class="quick-actions" data-rev>
-            <button id="analyzeButton" type="button" class="secondary quick quick-analyze" onclick="analyzeInbox()">Analyze Entire Inbox with AI</button>
             <button type="button" class="secondary quick quick-ask" data-goto="ask">Ask my inbox</button>
             <button type="button" class="secondary quick quick-dashboard" data-goto="dashboard">Open dashboard</button>
           </div>
@@ -304,65 +301,10 @@
       </div>
     </section>
 
-    <!-- 04 · AI Inbox -->
-    <section id="panel-ai" class="tab-panel" role="tabpanel" aria-labelledby="tab-ai" data-panel="ai" hidden>
-      <div class="wrap band">
-        <div class="eyebrow" data-rev><span class="mono">04 · AI Inbox</span></div>
-        <div class="head">
-          <h2 data-split="words">AI-organized inbox</h2>
-          <p id="analysisStatus" class="status muted lede" role="status" aria-live="polite"></p>
-        </div>
-        <div class="analyze-actions" data-rev>
-          <button id="analyzeNewButton" type="button" onclick="analyzeInbox('new')">Analyze new notes</button>
-          <button id="analyzeAllButton" type="button" class="secondary" onclick="analyzeInbox('all')">Analyze the entire notes with AI</button>
-        </div>
-        <div id="aiOutput" class="panel" data-rev>
-          <span class="muted">Save a few notes, then click “Analyze new notes” to organize only the notes you haven’t analyzed yet (or have edited), or “Analyze the entire notes with AI” to redo everything. Saved analysis reloads on refresh and is marked stale if the inbox changes.</span>
-        </div>
-      </div>
-    </section>
-
-    <!-- 05 · Tasks -->
-    <section id="panel-tasks" class="tab-panel" role="tabpanel" aria-labelledby="tab-tasks" data-panel="tasks" hidden>
-      <div class="wrap band">
-        <div class="eyebrow" data-rev><span class="mono">05 · Attention</span></div>
-        <div class="head">
-          <h2 data-split="words">Attention</h2>
-          <p class="sub lede" data-rev>Today, upcoming, overdue, and unscheduled open tasks. Dates keep the original phrase and require confirmation when ambiguous.</p>
-        </div>
-        <p id="briefingStatus" class="status muted" role="status" aria-live="polite"></p>
-        <div id="briefing" class="panel briefing" data-rev>
-          <span class="muted">Open tasks with timing appear here after analysis.</span>
-        </div>
-        <div id="attention" class="dashboard attention-board" data-rev></div>
-        <p id="calendarStatus" class="status muted" role="status" aria-live="polite"></p>
-        <div id="calendarPreview" class="panel" data-rev>
-          <span class="muted">Calendar previews require confirmation and never write to Google without owner approval.</span>
-        </div>
-      </div>
-
-      <div class="wrap band band-follow">
-        <div class="eyebrow" data-rev><span class="mono">Task list</span></div>
-        <div class="head">
-          <h2 data-split="words">Tasks</h2>
-          <div class="task-toolbar" data-rev>
-            <label for="taskStatusFilter">Show</label>
-            <select id="taskStatusFilter" onchange="changeTaskStatusFilter()">
-              <option value="open">Open</option>
-              <option value="completed">Completed</option>
-              <option value="dismissed">Dismissed</option>
-            </select>
-          </div>
-        </div>
-        <p id="taskStatus" class="status muted" role="status" aria-live="polite"></p>
-        <div id="tasks" class="card-list"></div>
-      </div>
-    </section>
-
-    <!-- 06 · Notes -->
+    <!-- 04 · Notes -->
     <section id="panel-notes" class="tab-panel" role="tabpanel" aria-labelledby="tab-notes" data-panel="notes" hidden>
       <div class="wrap band">
-        <div class="eyebrow" data-rev><span class="mono">06 · Notes</span></div>
+        <div class="eyebrow" data-rev><span class="mono">04 · Notes</span></div>
         <div class="head">
           <h2 data-split="words">Raw saved notes</h2>
         </div>

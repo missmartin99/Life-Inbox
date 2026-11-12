@@ -5,7 +5,7 @@ It preserves the features already present in the notebook:
 
 - save a text note;
 - list, edit, and delete saved notes;
-- organize notes into buckets, priorities, and ToDos (only new or edited notes are analyzed each time);
+- organize every saved note automatically into buckets, priorities, and ToDos (only new or edited notes are analyzed each time);
 - use the OpenAI API when an API key is available;
 - use the notebook's deterministic fallback organizer otherwise.
 
@@ -101,10 +101,18 @@ longer authoritative.
 
 ### Persisted analysis
 
-`POST /api/analyze` analyzes only notes that are new, or edited since their last
-analysis, and merges the result into the saved view so earlier notes keep their
-results. When nothing is new it returns the saved analysis without calling the
-AI. Use `POST /api/analyze?scope=all` to re-analyze the whole inbox. Successful
+Every saved note is analyzed automatically in the background right after it is
+saved (text, link, PDF, image and voice captures, and edits). Only notes that are
+new, or edited since their last analysis, are analyzed, and the result is merged
+into the saved view so earlier notes keep their results. A single worker runs
+the analyses one at a time, so no note is analyzed twice. If a background run
+fails the note stays pending and is retried on the next save or page load.
+Set `LIFE_INBOX_AUTO_ANALYZE=0` to turn automatic analysis off.
+
+`POST /api/analyze` is the manual trigger for the same thing. When nothing is
+new it returns the saved analysis without calling the AI. Use
+`POST /api/analyze?scope=all` to re-analyze the whole inbox, and
+`GET /api/analyze/pending` to see which notes are still waiting. Successful
 validated results are stored in `analysis_runs`, and each text item's latest category,
 concise title, and priority are stored in `item_insights`.
 
@@ -132,6 +140,22 @@ Task APIs:
 - `POST /api/tasks/{id}/complete` completes a task;
 - `POST /api/tasks/{id}/reopen` reopens a task;
 - `POST /api/tasks/{id}/dismiss` dismisses a task.
+
+There is no Tasks page in the browser. Open tasks show on the Dashboard and are
+answered through Ask. Dates are taken as read when a note is saved; the app never
+asks the user to confirm them (an ambiguous phrase such as "the 30th" or "this
+weekend" simply gets the best reading).
+
+Tasks are placed on the attention board (Overdue, Today, Upcoming, Unscheduled,
+Snoozed; `GET /api/attention`) from their timing phrase. A phrase with a clock time ("12:15 pm today")
+moves the task to Overdue as soon as that time has passed. Set
+`LIFE_INBOX_TIMEZONE` (for example `Asia/Kolkata`) so "today" and the clock use
+your timezone; it defaults to UTC.
+
+Questions about tasks in Ask My Inbox ("what do I have to do today?", "what is
+overdue?", "what is coming up?") are answered from the task board, so every
+matching task is listed with its due date and time. Other questions search the
+note text as before.
 
 Each inbox item can source at most one generated task. Reanalysis updates that
 task's latest text, priority, and timing in place instead of creating a

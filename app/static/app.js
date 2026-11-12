@@ -1,29 +1,8 @@
 let isSavingNote = false;
-let isAnalyzingInbox = false;
-let pendingAnalysisCount = null;
-
-// Every control that starts an analysis. The landing-page button keeps its
-// original behavior (analyze everything); the AI Inbox page has both options.
-const analyzeTriggers = [
-  {id: 'analyzeButton', idle: () => 'Analyze Entire Inbox with AI'},
-  {id: 'analyzeAllButton', idle: () => 'Analyze the entire notes with AI'},
-  {id: 'analyzeNewButton', idle: () => analyzeNewButtonLabel()},
-];
-
-function analyzeNewButtonLabel() {
-  return pendingAnalysisCount
-    ? `Analyze new notes (${pendingAnalysisCount})`
-    : 'Analyze new notes';
-}
-
-function updateAnalyzeButton(count) {
-  pendingAnalysisCount = typeof count === 'number' ? count : null;
-  if (isAnalyzingInbox) return;
-  const button = document.getElementById('analyzeNewButton');
-  if (button) button.textContent = analyzeNewButtonLabel();
-}
+let isWatchingAnalysis = false;
+let rewatchAnalysis = false;
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const pendingNoteActions = new Set();
-const pendingTaskActions = new Set();
 const itemFilterFields = {
   q: 'itemSearch',
   item_type: 'itemTypeFilter',
@@ -87,12 +66,6 @@ function syncControlsFromUrl() {
     }
     element.value = value;
   }
-
-  const taskStatus = params.get('task_status');
-  document.getElementById('taskStatusFilter').value =
-    ['open', 'completed', 'dismissed'].includes(taskStatus)
-      ? taskStatus
-      : 'open';
 }
 
 function populateCategoryFilter(data) {
@@ -144,12 +117,6 @@ function clearItemFilters() {
     )
   );
   loadNotes();
-}
-
-function changeTaskStatusFilter() {
-  const status = document.getElementById('taskStatusFilter').value;
-  updateUrl({task_status: status});
-  loadTasks();
 }
 
 async function fetchJson(url, options, friendlyError) {
@@ -734,8 +701,7 @@ async function deleteExistingNote(note, root, editButton, deleteButton) {
     LifeInboxPagination.afterLoadedNoteDeleted(itemPagination, note.id);
     root.remove();
     setStatus('noteStatus', 'Note deleted.');
-    await loadLatestAnalysis();
-    await loadTasks();
+    await loadLatestAnalysis('quiet');
   } catch {
     setStatus(
       'noteStatus',
@@ -752,331 +718,110 @@ async function deleteExistingNote(note, root, editButton, deleteButton) {
   }
 }
 
-function renderTask(task) {
-  const root = document.createElement('div');
-  root.className = 'task';
-  root.dataset.taskId = String(task.id);
-
-  const text = document.createElement('strong');
-  text.textContent = task.text;
-
-  const priority = document.createElement('span');
-  priority.className = 'pill';
-  priority.textContent = task.priority;
-
-  const content = document.createElement('div');
-  content.append(text, priority);
-
-  const meta = document.createElement('div');
-  meta.className = 'task-meta';
-  const timingLabel = task.timing_text
-    ? ` · ${task.timing_text}${task.timing_confirmed ? ' (confirmed)' : ' (AI suggested)'}`
-    : '';
-  const sources = task.source_item_ids
-    .map(itemId => `#${itemId}`)
-    .join(', ');
-  meta.textContent = `${task.status}${timingLabel} · Sources: ${sources}`;
-
-  const actions = document.createElement('div');
-  actions.className = 'task-actions';
-
-  if (task.status === 'open') {
-    actions.append(
-      actionButton('Complete', '', () => {
-        transitionTask(task.id, 'complete', actions);
-      }),
-      actionButton('Dismiss', 'secondary', () => {
-        transitionTask(task.id, 'dismiss', actions);
-      }),
-      actionButton('Snooze 1 day', 'secondary', async () => {
-        const until = new Date();
-        until.setUTCDate(until.getUTCDate() + 1);
-        const iso = until.toISOString().slice(0, 10);
-        try {
-          await fetchJson(
-            `/api/tasks/${task.id}/snooze`,
-            {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({until: iso})
-            },
-            'Unable to snooze task.'
-          );
-          setStatus('taskStatus', `Snoozed until ${iso}.`);
-          await loadTasks();
-          await loadAttention();
-        } catch {
-          setStatus('taskStatus', 'Could not snooze task.', true);
-        }
-      })
-    );
-    if (task.timing_text && !task.timing_confirmed) {
-      actions.append(
-        actionButton('Confirm date', 'secondary', async () => {
-          try {
-            await fetchJson(
-              `/api/tasks/${task.id}/confirm-timing`,
-              {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({timing_text: task.timing_text})
-              },
-              'Unable to confirm timing.'
-            );
-            setStatus('taskStatus', 'Timing confirmed.');
-            await loadTasks();
-            await loadDashboard();
-            await loadAttention();
-          } catch {
-            setStatus('taskStatus', 'Could not confirm timing.', true);
-          }
-        })
-      );
-    }
-    if (task.timing_confirmed && (task.due_on || task.timing_text)) {
-      actions.append(
-        actionButton('Preview calendar', 'secondary', () => {
-          previewCalendarForTask(task);
-        })
-      );
-    }
-  } else {
-    actions.append(
-      actionButton('Reopen', '', () => {
-        transitionTask(task.id, 'reopen', actions);
-      })
-    );
-  }
-
-  root.append(content, meta, actions);
-  return root;
-}
-
-async function transitionTask(taskId, action, actions) {
-  if (pendingTaskActions.has(taskId)) return;
-
-  pendingTaskActions.add(taskId);
-  const buttons = actions.querySelectorAll('button');
-  buttons.forEach(button => {
-    button.disabled = true;
-  });
-  setStatus('taskStatus', 'Updating task…');
-
-  try {
-    await fetchJson(
-      `/api/tasks/${taskId}/${action}`,
-      {method: 'POST'},
-      'Unable to update task.'
-    );
-    const messages = {
-      complete: 'Task completed.',
-      dismiss: 'Task dismissed.',
-      reopen: 'Task reopened.'
-    };
-    setStatus('taskStatus', messages[action]);
-    await loadTasks();
-    await loadAttention();
-  } catch {
-    setStatus(
-      'taskStatus',
-      'We could not update this task. Please try again.',
-      true
-    );
-    buttons.forEach(button => {
-      button.disabled = false;
-    });
-  } finally {
-    pendingTaskActions.delete(taskId);
-  }
-}
-
-async function loadTasks() {
-  const filter = document.getElementById('taskStatusFilter').value;
-  try {
-    const tasks = await fetchJson(
-      `/api/tasks?status=${encodeURIComponent(filter)}`,
-      undefined,
-      'Unable to load tasks.'
-    );
-    const root = document.getElementById('tasks');
-    root.innerHTML = '';
-
-    if (!tasks.length) {
-      root.innerHTML = '<div class="panel muted">No tasks in this view.</div>';
-      return true;
-    }
-
-    for (const task of tasks) {
-      root.appendChild(renderTask(task));
-    }
-    return true;
-  } catch {
-    setStatus(
-      'taskStatus',
-      'We could not load tasks. Reload to try again.',
-      true
-    );
-    return false;
-  }
-}
-
-function renderAnalysis(data) {
-  const root = document.getElementById('aiOutput');
-  const generatedAt = data.generated_at
-    ? new Date(data.generated_at).toLocaleString()
-    : null;
-  const staleBanner = data.is_stale
-    ? `<div class="banner warn" role="status">Analysis is stale — inbox items changed since this run. Re-analyze to refresh.</div>`
-    : '';
-
-  const bucketHtml = (data.buckets || []).map(bucket => `
-    <div class="panel">
-      <h3>${esc(bucket.name)}</h3>
-      <ul>
-        ${(bucket.notes || []).map(n =>
-          `<li>${esc(n.title)} <span class="pill">${esc(n.priority)}</span></li>`
-        ).join('')}
-      </ul>
-    </div>
-  `).join('');
-
-  const todoHtml = (data.todos || []).map(t =>
-    `<li><strong>${esc(t.task)}</strong> <span class="pill">${esc(t.priority)}</span>${t.when ? ` · ${esc(t.when)}` : ''}</li>`
-  ).join('');
-
-  const pv = data.priority_view || {High: [], Medium: [], Low: []};
-  const priorityHtml = ['High', 'Medium', 'Low'].map(level => `
-    <div class="panel">
-      <h3>${level} priority (${(pv[level] || []).length})</h3>
-      <ul>
-        ${(pv[level] || []).map(n => `<li>${esc(n.title)}</li>`).join('') || '<li class="muted">None</li>'}
-      </ul>
-    </div>
-  `).join('');
-
-  root.innerHTML = `
-    ${staleBanner}
-    ${generatedAt ? `<p class="muted"><strong>Generated:</strong> ${esc(generatedAt)}</p>` : ''}
-
-    <h3>Buckets</h3>
-    ${bucketHtml || '<p class="muted">No notes yet.</p>'}
-
-    <h3>ToDos</h3>
-    <ul>${todoHtml || '<li class="muted">No concrete ToDos detected.</li>'}</ul>
-
-    <h3>Priority view</h3>
-    ${priorityHtml}
-
-    <p class="muted">Mode: ${esc(data.mode || 'unknown')}</p>
-  `;
-}
-
-async function refreshPendingAnalysisCount() {
-  try {
-    const data = await fetchJson(
-      '/api/analyze/pending',
-      undefined,
-      'Unable to check for new notes.'
-    );
-    updateAnalyzeButton(data.pending_count);
-  } catch {
-    // The button keeps its previous label if the count cannot be loaded.
-  }
-}
-
-async function loadLatestAnalysis() {
-  refreshPendingAnalysisCount();
+// New notes are analyzed automatically by the server right after they are
+// saved. These helpers wait for that to finish, then refresh every view that
+// shows analysis results (tasks, topics, dashboard, attention, filters).
+async function refreshAfterAnalysis() {
   try {
     const data = await fetchJson(
       '/api/analyze/latest',
       undefined,
       'Unable to load saved analysis.'
     );
-    if (!data) return;
-
-    populateCategoryFilter(data);
-    renderAnalysis(data);
-    const generatedAt = new Date(data.generated_at).toLocaleString();
-    setStatus(
-      'analysisStatus',
-      data.is_stale
-        ? `Saved analysis from ${generatedAt} is stale — re-analyze after inbox changes.`
-        : `Showing saved analysis generated ${generatedAt}.`,
-      Boolean(data.is_stale)
-    );
+    if (data) populateCategoryFilter(data);
   } catch {
-    setStatus(
-      'analysisStatus',
-      'We could not load the saved analysis. You can try analyzing again.',
-      true
-    );
+    // The category filter keeps its current options.
   }
+  await Promise.allSettled([
+    loadTopics(),
+    loadDashboard(),
+  ]);
 }
 
-function setAnalyzeButtonsBusy(busy, clickedId) {
-  for (const trigger of analyzeTriggers) {
-    const button = document.getElementById(trigger.id);
-    if (!button) continue;
-    const idle = trigger.idle();
-    setButtonBusy(
-      trigger.id,
-      busy,
-      trigger.id === clickedId ? 'Analyzing…' : idle,
-      idle
-    );
+async function waitForAutoAnalysis(force) {
+  let sawPending = false;
+  let idlePolls = 0;
+  for (let attempt = 0; attempt < 120; attempt++) {
+    let state;
+    try {
+      state = await fetchJson(
+        '/api/analyze/pending',
+        undefined,
+        'Unable to check for new notes.'
+      );
+    } catch {
+      await sleep(2000);
+      continue;
+    }
+
+    if (state.pending_count === 0) {
+      if (sawPending || force) await refreshAfterAnalysis();
+      if (sawPending) setStatus('noteStatus', 'Organized with AI.');
+      return;
+    }
+
+    if (!sawPending) {
+      setStatus('noteStatus', 'Organizing your new note with AI…');
+    }
+    sawPending = true;
+
+    // If nothing is working on the pending notes (for example a background
+    // run failed), ask the server to analyze them now so none are left behind.
+    idlePolls = state.analyzing ? 0 : idlePolls + 1;
+    if (idlePolls >= 2) {
+      idlePolls = 0;
+      try {
+        await fetchJson(
+          '/api/analyze?scope=new',
+          {method: 'POST'},
+          'Unable to analyze new notes.'
+        );
+      } catch {
+        // Retried on the next poll.
+      }
+    }
+    await sleep(1500);
   }
-}
-
-// scope 'all' analyzes the entire inbox; 'new' only notes not yet analyzed.
-async function analyzeInbox(scope = 'all', clickedId = null) {
-  if (isAnalyzingInbox) return;
-
-  const analyzeAll = scope !== 'new';
-  const trigger = clickedId || (
-    analyzeAll ? 'analyzeButton' : 'analyzeNewButton'
-  );
-  isAnalyzingInbox = true;
-  setAnalyzeButtonsBusy(true, trigger);
   setStatus(
-    'analysisStatus',
-    analyzeAll
-      ? 'Analyzing your entire inbox…'
-      : pendingAnalysisCount === 0
-        ? 'Checking for new notes…'
-        : 'Analyzing your new notes…'
+    'noteStatus',
+    'Your notes are saved but not organized yet. They will be analyzed automatically shortly.',
+    true
   );
+}
 
+async function watchAnalysis(force) {
+  if (isWatchingAnalysis) {
+    rewatchAnalysis = rewatchAnalysis || force;
+    return;
+  }
+  isWatchingAnalysis = true;
+  try {
+    let needed = force;
+    do {
+      rewatchAnalysis = false;
+      await waitForAutoAnalysis(needed);
+      needed = rewatchAnalysis;
+    } while (rewatchAnalysis);
+  } finally {
+    isWatchingAnalysis = false;
+  }
+}
+
+// mode 'saved': a note was just saved, so wait for its analysis and refresh.
+// mode 'quiet': only refresh the category filter (and rescue leftovers).
+async function loadLatestAnalysis(mode = 'saved') {
   try {
     const data = await fetchJson(
-      analyzeAll ? '/api/analyze?scope=all' : '/api/analyze?scope=new',
-      {method: 'POST'},
-      'Unable to analyze inbox.'
+      '/api/analyze/latest',
+      undefined,
+      'Unable to load saved analysis.'
     );
-    populateCategoryFilter(data);
-    renderAnalysis(data);
-    await loadTasks();
-    await loadTopics();
-    await loadDashboard();
-    const analyzed = (data.analyzed_item_ids || []).length;
-    const noun = analyzed === 1 ? 'note' : 'notes';
-    setStatus(
-      'analysisStatus',
-      analyzeAll
-        ? `Analysis complete. Analyzed all ${analyzed} ${noun}.`
-        : analyzed === 0
-          ? 'No new notes to analyze — everything is already organized.'
-          : `Analysis complete. Analyzed ${analyzed} new ${noun}; earlier results are unchanged.`
-    );
+    if (data) populateCategoryFilter(data);
   } catch {
-    setStatus(
-      'analysisStatus',
-      'We could not analyze your inbox. Your notes are still here—please try again.',
-      true
-    );
-  } finally {
-    isAnalyzingInbox = false;
-    setAnalyzeButtonsBusy(false, trigger);
+    // The category filter keeps its current options.
   }
+  // Not awaited: saving must stay instant while the analysis runs behind it.
+  watchAnalysis(mode === 'saved').catch(() => {});
 }
 
 const itemPagination = LifeInboxPagination.createState(
@@ -1261,7 +1006,7 @@ async function loadDashboard() {
       undefined,
       'Unable to load dashboard.'
     );
-    updateAnalyzeButton(data.pending_analysis_count);
+    if (data.pending_analysis_count > 0) watchAnalysis(false);
     const root = document.getElementById('dashboard');
     const section = (title, body) => `
       <div class="panel">
@@ -1283,7 +1028,7 @@ async function loadDashboard() {
           `<li>${esc(item.effective_title || item.raw_text || ('#' + item.id))}${item.rationale ? `<div class="why">Why: ${esc(item.rationale)}</div>` : ''}</li>`
         ))}
         ${section('Open Tasks', listOrEmpty(data.open_tasks, task =>
-          `<li><strong>${esc(task.text)}</strong> <span class="pill">${esc(task.priority)}</span>${task.timing_text ? ` · ${esc(task.timing_text)}${task.timing_confirmed ? ' (confirmed)' : ' (AI suggested)'}` : ''}</li>`
+          `<li><strong>${esc(task.text)}</strong> <span class="pill">${esc(task.priority)}</span>${task.timing_text ? ` · ${esc(task.timing_text)}` : ''}</li>`
         ))}
         ${section('Recently Captured', listOrEmpty(data.recently_captured, item =>
           `<li>#${item.id} · ${esc((item.raw_text || '').slice(0, 80))}</li>`
@@ -1316,6 +1061,7 @@ function renderAskResponse(data) {
   const modeLabel = data.mode ? ` · ${String(data.mode).replaceAll('_', ' ')}` : '';
   confidence.textContent = `Confidence: ${data.confidence} · ${data.answer_kind.replace('_', ' ')}${modeLabel}`;
   const answer = document.createElement('div');
+  answer.style.whiteSpace = 'pre-line';
   answer.textContent = data.answer;
   root.append(confidence, answer);
   if (data.citations && data.citations.length) {
@@ -1360,113 +1106,6 @@ async function askInbox(event) {
   }
 }
 
-async function loadAttention() {
-  const briefingRoot = document.getElementById('briefing');
-  const attentionRoot = document.getElementById('attention');
-  try {
-    const [briefing, board] = await Promise.all([
-      fetchJson('/api/briefing', {}, 'Unable to load briefing.'),
-      fetchJson('/api/attention', {}, 'Unable to load attention board.')
-    ]);
-    briefingRoot.innerHTML = [
-      `<strong>Daily briefing</strong> · ${esc(briefing.reference_date)}`,
-      `<div>${esc(briefing.summary)}</div>`,
-      briefing.priority_suggestions.length
-        ? `<div class="provenance"><span class="label">Suggested focus</span>: ${
-            briefing.priority_suggestions
-              .map(item => `#${item.task_id} ${esc(item.text)} (${esc(item.reason)})`)
-              .join('; ')
-          }</div>`
-        : '<div class="muted">No timed open tasks yet.</div>'
-    ].join('');
-
-    const sections = [
-      ['overdue', 'Overdue'],
-      ['today', 'Today'],
-      ['upcoming', 'Upcoming'],
-      ['unscheduled', 'Unscheduled'],
-      ['snoozed', 'Snoozed']
-    ];
-    attentionRoot.replaceChildren();
-    for (const [key, label] of sections) {
-      const panel = document.createElement('div');
-      panel.className = 'panel';
-      const items = board[key] || [];
-      panel.innerHTML = `<strong>${esc(label)}</strong> <span class="muted">(${items.length})</span>`;
-      if (!items.length) {
-        const empty = document.createElement('div');
-        empty.className = 'muted';
-        empty.textContent = 'None';
-        panel.appendChild(empty);
-      } else {
-        for (const item of items.slice(0, 8)) {
-          const row = document.createElement('div');
-          row.className = 'task-meta';
-          const phrase = item.original_timing_phrase
-            ? ` · “${item.original_timing_phrase}”`
-            : '';
-          const due = item.normalized_due_on ? ` → ${item.normalized_due_on}` : '';
-          const conf = item.due_confidence ? ` · ${item.due_confidence}` : '';
-          const needs = item.needs_confirmation ? ' · needs confirmation' : '';
-          row.textContent = `#${item.id} ${item.text}${phrase}${due}${conf}${needs}`;
-          panel.appendChild(row);
-        }
-      }
-      attentionRoot.appendChild(panel);
-    }
-    setStatus('briefingStatus', 'Attention board updated.');
-  } catch {
-    setStatus('briefingStatus', 'Could not load attention board.', true);
-  }
-}
-
-async function previewCalendarForTask(task) {
-  setStatus('calendarStatus', 'Building calendar preview…');
-  try {
-    const preview = await fetchJson(
-      '/api/calendar/preview',
-      {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({task_id: task.id})
-      },
-      'Unable to preview calendar event.'
-    );
-    const root = document.getElementById('calendarPreview');
-    root.innerHTML = [
-      `<strong>Calendar preview</strong> (${esc(preview.provider)} / ${esc(preview.status)})`,
-      `<div>${esc(preview.title)} · ${esc(preview.start_date)} (${esc(preview.timezone)})</div>`,
-      `<div class="provenance">${(preview.notes || []).map(note => esc(note)).join(' · ')}</div>`
-    ].join('');
-    const confirmBtn = actionButton('Confirm (mock only)', '', async () => {
-      try {
-        const confirmed = await fetchJson(
-          '/api/calendar/confirm',
-          {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({draft_id: preview.draft_id})
-          },
-          'Unable to confirm calendar action.'
-        );
-        setStatus(
-          'calendarStatus',
-          confirmed.status === 'confirmed_mock'
-            ? 'Mock calendar confirmation recorded. No external event created.'
-            : `Calendar action status: ${confirmed.status}`
-        );
-        root.innerHTML += `<div class="provenance"><span class="label">Receipt</span>: ${esc(confirmed.status)} / ${esc(confirmed.provider)}</div>`;
-      } catch (error) {
-        setStatus('calendarStatus', error.message || 'Calendar confirm blocked or failed.', true);
-      }
-    });
-    root.appendChild(confirmBtn);
-    setStatus('calendarStatus', 'Preview ready — confirm explicitly to record a mock receipt.');
-  } catch (error) {
-    setStatus('calendarStatus', error.message || 'Calendar preview failed.', true);
-  }
-}
-
 async function loadAuthUser() {
   try {
     const user = await fetchJson('/api/auth/me', {}, 'Unable to load session.');
@@ -1494,8 +1133,6 @@ async function devLogin(event) {
     setStatus('authStatus', `Signed in as ${user.email}`);
     await loadAuthUser();
     await loadNotes();
-    await loadTasks();
-    await loadAttention();
     await loadDashboard();
   } catch {
     setStatus('authStatus', 'Sign-in failed (dev login may be disabled).', true);
@@ -1515,14 +1152,11 @@ async function logoutSession() {
 syncControlsFromUrl();
 loadAuthUser();
 loadNotes();
-loadLatestAnalysis();
-loadTasks();
+loadLatestAnalysis('quiet');
 loadTopics();
 loadDashboard();
-loadAttention();
 
 window.addEventListener('popstate', () => {
   syncControlsFromUrl();
   loadNotes();
-  loadTasks();
 });

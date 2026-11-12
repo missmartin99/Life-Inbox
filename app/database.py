@@ -1409,12 +1409,13 @@ def set_task_reminder_in_db(task_id: int, reminder_iso_date: str) -> Optional[di
 def get_attention_board() -> dict:
     from app.attention.dates import (
         classify_attention_bucket,
+        now_in_configured_tz,
         parse_timing_phrase,
-        today_in_configured_tz,
     )
     from datetime import date as date_cls
 
-    today = today_in_configured_tz()
+    now = now_in_configured_tz()
+    today = now.date()
     board = {
         "today": [],
         "upcoming": [],
@@ -1440,22 +1441,27 @@ def get_attention_board() -> dict:
                 snoozed = date_cls.fromisoformat(task["snoozed_until"])
             except ValueError:
                 snoozed = None
-        bucket = classify_attention_bucket(due, reference=today, snoozed_until=snoozed)
+        due_time = parsed.due_time if due is not None else None
+        bucket = classify_attention_bucket(
+            due,
+            reference=today,
+            snoozed_until=snoozed,
+            due_time=due_time,
+            now=now,
+        )
         entry = {
             **task,
             "original_timing_phrase": task.get("timing_text"),
             "normalized_due_on": due.isoformat() if due else None,
+            "due_time": due_time.strftime("%H:%M") if due_time else None,
             "due_confidence": task.get("due_confidence") or parsed.confidence,
-            "needs_confirmation": (
-                (not task.get("timing_confirmed"))
-                and parsed.needs_confirmation
-            ),
+            # Dates are taken as read when the note is saved; the user is
+            # never asked to confirm them.
+            "needs_confirmation": False,
             "attention_bucket": bucket,
             "parse_note": parsed.note,
         }
         board[bucket].append(entry)
-        if entry["needs_confirmation"]:
-            board["needs_confirmation"].append(entry)
     return board
 
 
@@ -1467,13 +1473,20 @@ def get_daily_briefing() -> dict:
         key=lambda item: (
             priority_rank.get(item.get("priority"), 9),
             item.get("normalized_due_on") or "9999",
+            item.get("due_time") or "99:99",
         ),
     )
     suggestions = []
     for item in focus[:5]:
         reason = []
         if item["attention_bucket"] == "overdue":
-            reason.append("overdue")
+            if (
+                item.get("due_time")
+                and item.get("normalized_due_on") == board["reference_date"]
+            ):
+                reason.append(f"overdue since {item['due_time']}")
+            else:
+                reason.append("overdue")
         if item["attention_bucket"] == "today":
             reason.append("due today")
         if item.get("priority") == "High":
