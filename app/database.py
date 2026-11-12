@@ -2132,10 +2132,15 @@ def save_item_entities(item_id: int, entities: list) -> Optional[list]:
         return saved
 
 
-def list_entities(entity_type: Optional[str] = None, days: Optional[int] = None) -> list:
+def list_entities(
+    entity_type: Optional[str] = None,
+    days: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> list:
     """Entities that appear in at least one item, most-mentioned first.
     
-    If days is given, only counts items created within the past `days` days.
+    If days, start_date, or end_date is given, only counts items created within that timeframe.
     """
     owner_id = require_owner_id()
     with SessionLocal() as session:
@@ -2145,32 +2150,59 @@ def list_entities(entity_type: Optional[str] = None, days: Optional[int] = None)
             .join(ItemEntityRecord, ItemEntityRecord.entity_id == EntityRecord.id)
             .where(EntityRecord.owner_user_id == owner_id)
         )
+        needs_item_join = False
+        item_filters = []
         if days is not None:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            item_filters.append(InboxItemRecord.created_at >= cutoff)
+            needs_item_join = True
+        if start_date:
+            start_iso = start_date if "T" in start_date else f"{start_date}T00:00:00"
+            item_filters.append(InboxItemRecord.created_at >= start_iso)
+            needs_item_join = True
+        if end_date:
+            end_iso = end_date if "T" in end_date else f"{end_date}T23:59:59"
+            item_filters.append(InboxItemRecord.created_at <= end_iso)
+            needs_item_join = True
+
+        if needs_item_join:
             query = query.join(
                 InboxItemRecord, ItemEntityRecord.item_id == InboxItemRecord.id
-            ).where(InboxItemRecord.created_at >= cutoff)
+            ).where(*item_filters)
+
         query = query.group_by(EntityRecord.id).order_by(item_count.desc(), EntityRecord.name)
         if entity_type:
             query = query.where(EntityRecord.entity_type == entity_type)
         return [_entity_to_dict(e, count) for e, count in session.execute(query)]
 
 
-def get_entity_page(entity_id: int) -> Optional[dict]:
-    """One entity plus every item that mentions it, newest first."""
+def get_entity_page(
+    entity_id: int,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Optional[dict]:
+    """One entity plus every item that mentions it, newest first (optionally filtered by date range)."""
     owner_id = require_owner_id()
     with SessionLocal() as session:
         entity = session.get(EntityRecord, entity_id)
         if entity is None or entity.owner_user_id != owner_id:
             return None
-        items = session.scalars(
+        query = (
             select(InboxItemRecord)
             .join(ItemEntityRecord, ItemEntityRecord.item_id == InboxItemRecord.id)
             .where(ItemEntityRecord.entity_id == entity_id)
-            .order_by(InboxItemRecord.id.desc())
         )
+        if start_date:
+            start_iso = start_date if "T" in start_date else f"{start_date}T00:00:00"
+            query = query.where(InboxItemRecord.created_at >= start_iso)
+        if end_date:
+            end_iso = end_date if "T" in end_date else f"{end_date}T23:59:59"
+            query = query.where(InboxItemRecord.created_at <= end_iso)
+
+        items = session.scalars(query.order_by(InboxItemRecord.id.desc()))
         page = _entity_to_dict(entity)
         page["items"] = [_item_to_dict(item) for item in items]
+        page["filtered_count"] = len(page["items"])
         return page
 
 

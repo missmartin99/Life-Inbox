@@ -1238,15 +1238,165 @@ window.addEventListener('popstate', () => {
    Applied AI UI Extensions: Entities Treemap, Smart Cards, API & MCP
    ========================================================================= */
 
-// --- 05 · Entities Treemap -----------------------------------------------
+// --- 05 · Entities Treemap & Timeline Scrubber --------------------------
 let allEntitiesCache = [];
 let currentEntityTypeFilter = '';
-let currentEntityPeriod = null;
+let currentTimelineStartDate = null;
+let currentTimelineEndDate = null;
 let currentDossierEntityId = null;
 
-async function loadEntities(typeFilter = undefined, periodFilter = undefined) {
+const TIMELINE_MONTHS = [
+  { key: '2025-11', label: "Nov '25", start: '2025-11-01', end: '2025-11-30' },
+  { key: '2025-12', label: "Dec '25", start: '2025-12-01', end: '2025-12-31' },
+  { key: '2026-01', label: "Jan '26", start: '2026-01-01', end: '2026-01-31' },
+  { key: '2026-02', label: "Feb '26", start: '2026-02-01', end: '2026-02-28' },
+  { key: '2026-03', label: "Mar '26", start: '2026-03-01', end: '2026-03-31' },
+  { key: '2026-04', label: "Apr '26", start: '2026-04-01', end: '2026-04-30' },
+  { key: '2026-05', label: "May '26", start: '2026-05-01', end: '2026-05-31' },
+  { key: '2026-06', label: "Jun '26", start: '2026-06-01', end: '2026-06-30' },
+  { key: '2026-07', label: "Jul '26", start: '2026-07-01', end: '2026-07-31' },
+  { key: '2026-08', label: "Aug '26", start: '2026-08-01', end: '2026-08-31' },
+  { key: '2026-09', label: "Sep '26", start: '2026-09-01', end: '2026-09-30' },
+  { key: '2026-10', label: "Oct '26", start: '2026-10-01', end: '2026-10-31' },
+  { key: '2026-11', label: "Nov '26", start: '2026-11-01', end: '2026-11-12' },
+];
+
+function updateTimelineSliderVisual(startIdx, endIdx) {
+  const highlight = document.getElementById('timelineSliderHighlight');
+  if (highlight) {
+    const leftPct = (startIdx / 12) * 100;
+    const rightPct = 100 - (endIdx / 12) * 100;
+    highlight.style.left = `${leftPct}%`;
+    highlight.style.right = `${rightPct}%`;
+  }
+}
+
+function onTimelineSliderChange() {
+  const sInput = document.getElementById('timelineSliderStart');
+  const eInput = document.getElementById('timelineSliderEnd');
+  if (!sInput || !eInput) return;
+
+  let sVal = parseInt(sInput.value, 10);
+  let eVal = parseInt(eInput.value, 10);
+
+  if (sVal > eVal) {
+    if (document.activeElement === sInput) {
+      eInput.value = sVal;
+      eVal = sVal;
+    } else {
+      sInput.value = eVal;
+      sVal = eVal;
+    }
+  }
+
+  updateTimelineSliderVisual(sVal, eVal);
+
+  const startEntry = TIMELINE_MONTHS[sVal];
+  const endEntry = TIMELINE_MONTHS[eVal];
+
+  const dateFrom = document.getElementById('timelineDateFrom');
+  const dateTo = document.getElementById('timelineDateTo');
+  if (dateFrom) dateFrom.value = startEntry.start;
+  if (dateTo) dateTo.value = endEntry.end;
+
+  // Clear active pills
+  document.querySelectorAll('.entity-time-chip').forEach(p => p.classList.remove('active'));
+
+  applyTimelineRange(startEntry.start, endEntry.end, `${startEntry.label} – ${endEntry.label}`);
+}
+
+function onTimelineDateInputChange() {
+  const dateFrom = document.getElementById('timelineDateFrom');
+  const dateTo = document.getElementById('timelineDateTo');
+  if (!dateFrom || !dateTo) return;
+
+  const startVal = dateFrom.value;
+  const endVal = dateTo.value;
+
+  // Sync sliders to closest months
+  const sIdx = Math.max(0, TIMELINE_MONTHS.findIndex(m => m.end >= startVal));
+  const eIdx = Math.max(0, TIMELINE_MONTHS.findIndex(m => m.end >= endVal));
+  const sInput = document.getElementById('timelineSliderStart');
+  const eInput = document.getElementById('timelineSliderEnd');
+  if (sInput) sInput.value = sIdx;
+  if (eInput) eInput.value = eIdx !== -1 ? eIdx : 12;
+  updateTimelineSliderVisual(sIdx, eIdx !== -1 ? eIdx : 12);
+
+  document.querySelectorAll('.entity-time-chip').forEach(p => p.classList.remove('active'));
+  applyTimelineRange(startVal, endVal, `${startVal} to ${endVal}`);
+}
+
+function setTimelinePreset(preset) {
+  document.querySelectorAll('.entity-time-chip').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('onclick').includes(preset));
+  });
+
+  const sInput = document.getElementById('timelineSliderStart');
+  const eInput = document.getElementById('timelineSliderEnd');
+  const dateFrom = document.getElementById('timelineDateFrom');
+  const dateTo = document.getElementById('timelineDateTo');
+
+  let s = null, e = null, sIdx = 0, eIdx = 12, label = 'All Time';
+
+  if (preset === 'all') {
+    s = null;
+    e = null;
+    sIdx = 0;
+    eIdx = 12;
+    label = 'All Time (Nov 2025 – Nov 2026)';
+  } else if (preset === 'sep2026') {
+    s = '2026-09-01';
+    e = '2026-09-30';
+    sIdx = 10;
+    eIdx = 10;
+    label = 'September 2026 (Jaipur Trip)';
+  } else if (preset === '30d') {
+    s = '2026-10-13';
+    e = '2026-11-12';
+    sIdx = 11;
+    eIdx = 12;
+    label = 'Past 30 Days';
+  } else if (preset === '90d') {
+    s = '2026-08-14';
+    e = '2026-11-12';
+    sIdx = 9;
+    eIdx = 12;
+    label = 'Past 90 Days';
+  } else if (preset === 'thisyear') {
+    s = '2026-01-01';
+    e = '2026-11-12';
+    sIdx = 2;
+    eIdx = 12;
+    label = 'Year 2026';
+  }
+
+  if (sInput) sInput.value = sIdx;
+  if (eInput) eInput.value = eIdx;
+  updateTimelineSliderVisual(sIdx, eIdx);
+
+  if (dateFrom) dateFrom.value = s || '2025-11-01';
+  if (dateTo) dateTo.value = e || '2026-11-12';
+
+  applyTimelineRange(s, e, label);
+}
+
+function applyTimelineRange(start, end, displayLabel) {
+  currentTimelineStartDate = start;
+  currentTimelineEndDate = end;
+
+  const displayEl = document.getElementById('timelineRangeDisplay');
+  if (displayEl) displayEl.textContent = displayLabel;
+
+  loadEntities();
+
+  // If dossier is active, refresh it under new time period
+  if (currentDossierEntityId) {
+    showDossier(currentDossierEntityId);
+  }
+}
+
+async function loadEntities(typeFilter = undefined) {
   if (typeFilter !== undefined) currentEntityTypeFilter = typeFilter;
-  if (periodFilter !== undefined) currentEntityPeriod = periodFilter;
 
   const statusEl = document.getElementById('entitiesStatus');
   const listEl = document.getElementById('entitiesList');
@@ -1254,20 +1404,24 @@ async function loadEntities(typeFilter = undefined, periodFilter = undefined) {
   try {
     const params = new URLSearchParams();
     if (currentEntityTypeFilter) params.append('type', currentEntityTypeFilter);
-    if (currentEntityPeriod) params.append('days', currentEntityPeriod);
+    if (currentTimelineStartDate) params.append('start_date', currentTimelineStartDate);
+    if (currentTimelineEndDate) params.append('end_date', currentTimelineEndDate);
     const qs = params.toString();
     const url = qs ? `/api/entities?${qs}` : '/api/entities';
 
     const entities = await fetchJson(url, {}, 'Failed to load entities');
     allEntitiesCache = entities;
     if (entities.length === 0) {
-      statusEl.textContent = 'No entities found for this filter & timeframe. Try expanding the time period or clearing filters.';
+      statusEl.textContent = 'No entities found for this timeframe. Try adjusting the timeline slider or clearing filters.';
       listEl.innerHTML = '';
       renderEntityTreemap([]);
       return;
     }
-    const periodLabel = currentEntityPeriod ? ` (past ${currentEntityPeriod} days)` : ' (all time)';
-    statusEl.textContent = `Visualizing ${entities.length} entities scaled by note mentions${periodLabel}:`;
+
+    const rangeHint = (currentTimelineStartDate || currentTimelineEndDate)
+      ? ` for ${currentTimelineStartDate || 'start'} to ${currentTimelineEndDate || 'now'}`
+      : ' (all-time history)';
+    statusEl.textContent = `Visualizing ${entities.length} entities scaled by note mentions${rangeHint}:`;
     listEl.innerHTML = entities.map(ent => `
       <div class="entity-card" onclick="showDossier(${ent.id})">
         <div class="entity-card-head">
@@ -1289,18 +1443,7 @@ function filterEntitiesByType(type) {
   document.querySelectorAll('.entity-type-chip').forEach(btn => {
     btn.classList.toggle('active', btn.textContent.toLowerCase().includes(type) || (!type && btn.textContent === 'All'));
   });
-  loadEntities(type, undefined);
-}
-
-function filterEntitiesByPeriod(days) {
-  document.querySelectorAll('.entity-time-chip').forEach(btn => {
-    if (days === null) {
-      btn.classList.toggle('active', btn.textContent.includes('All'));
-    } else {
-      btn.classList.toggle('active', btn.textContent.includes(String(days)) || (days === 365 && btn.textContent.includes('1 Year')));
-    }
-  });
-  loadEntities(undefined, days);
+  loadEntities(type);
 }
 
 async function showDossier(entityId) {
@@ -1308,35 +1451,51 @@ async function showDossier(entityId) {
   const dossierEl = document.getElementById('entityDossier');
   const titleEl = document.getElementById('dossierTitle');
   const typeEl = document.getElementById('dossierType');
+  const noticeEl = document.getElementById('dossierTimelineNotice');
   const itemsEl = document.getElementById('dossierItems');
   const summaryEl = document.getElementById('dossierSummaryText');
   if (!dossierEl) return;
 
   try {
-    const data = await fetchJson(`/api/entities/${entityId}`, {}, 'Failed to fetch dossier');
+    const params = new URLSearchParams();
+    if (currentTimelineStartDate) params.append('start_date', currentTimelineStartDate);
+    if (currentTimelineEndDate) params.append('end_date', currentTimelineEndDate);
+    const qs = params.toString();
+
+    const data = await fetchJson(`/api/entities/${entityId}${qs ? '?' + qs : ''}`, {}, 'Failed to fetch dossier');
     dossierEl.hidden = false;
     titleEl.textContent = `Dossier: ${data.name}`;
     typeEl.innerHTML = `<span class="feature-badge ${data.type}">${data.type.toUpperCase()}</span>`;
-    
+
+    if (noticeEl) {
+      if (currentTimelineStartDate || currentTimelineEndDate) {
+        noticeEl.hidden = false;
+        noticeEl.textContent = `Filtered Timeline: ${data.items ? data.items.length : 0} of ${data.total_mentions || data.item_count || data.items.length} notes in range`;
+      } else {
+        noticeEl.hidden = false;
+        noticeEl.textContent = `All Time: ${data.items ? data.items.length : 0} notes`;
+      }
+    }
+
     if (summaryEl) {
-      summaryEl.textContent = 'Synthesizing profile summary from connected notes…';
+      summaryEl.textContent = 'Synthesizing conversational profile summary…';
     }
 
     if (!data.items || data.items.length === 0) {
-      itemsEl.innerHTML = '<div class="muted">No items explicitly linked yet.</div>';
+      itemsEl.innerHTML = '<div class="muted" style="padding:16px 0;">No notes found for this entity within the selected timeline window. Try expanding the slider dates above.</div>';
     } else {
       itemsEl.innerHTML = data.items.map(item => `
-        <div style="padding:12px; background:var(--void); border:1px solid var(--line); border-radius:var(--radius-inner);">
+        <div style="padding:12px 14px; background:var(--void); border:1px solid var(--line); border-radius:var(--radius-inner);">
           <div style="font-weight:500; font-size:14px; color:var(--text);">${esc(item.title || item.raw_text?.slice(0, 80) || 'Inbox Item')}</div>
-          <div class="muted" style="font-size:12px; margin-top:4px;">${esc(item.raw_text?.slice(0, 160) || '')}</div>
-          <div class="mono" style="font-size:11px; color:var(--indigo-text); margin-top:6px;">Item #${item.id} · ${item.item_type} · ${item.created_at}</div>
+          <div class="muted" style="font-size:12.5px; margin-top:4px; line-height:1.5;">${esc(item.raw_text?.slice(0, 180) || '')}</div>
+          <div class="mono" style="font-size:11px; color:var(--indigo-text); margin-top:6px;">Item #${item.id} · ${item.item_type} · ${item.created_at?.slice(0, 10)}</div>
         </div>
       `).join('');
     }
     dossierEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
     // Fetch AI Summary asynchronously
-    fetchJson(`/api/entities/${entityId}/summary`, {}, 'Failed to fetch summary')
+    fetchJson(`/api/entities/${entityId}/summary${qs ? '?' + qs : ''}`, {}, 'Failed to fetch summary')
       .then(res => {
         if (summaryEl && currentDossierEntityId === entityId) {
           summaryEl.textContent = res.summary;
@@ -1360,7 +1519,12 @@ async function refreshDossierSummary() {
   if (btn) btn.disabled = true;
 
   try {
-    const res = await fetchJson(`/api/entities/${currentDossierEntityId}/summary`, {}, 'Failed to refresh summary');
+    const params = new URLSearchParams();
+    if (currentTimelineStartDate) params.append('start_date', currentTimelineStartDate);
+    if (currentTimelineEndDate) params.append('end_date', currentTimelineEndDate);
+    const qs = params.toString();
+
+    const res = await fetchJson(`/api/entities/${currentDossierEntityId}/summary${qs ? '?' + qs : ''}`, {}, 'Failed to refresh summary');
     if (summaryEl) summaryEl.textContent = res.summary;
   } catch {
     if (summaryEl) summaryEl.textContent = 'Failed to generate updated summary.';

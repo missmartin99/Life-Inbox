@@ -173,11 +173,21 @@ def test_entity_summary_and_time_filter(client):
     client.post(f"/api/items/{item1['id']}/entities")
     client.post(f"/api/items/{item2['id']}/entities")
 
-    # Time filter test
+    # Time filter test (days)
     entities_30d = client.get("/api/entities?days=30").json()
     assert len(entities_30d) == 1
     assert entities_30d[0]["name"] == "Dr. Mehta"
     assert entities_30d[0]["item_count"] == 2
+
+    # Date range filter test (start_date / end_date)
+    today_str = item1["created_at"][:10]
+    entities_range = client.get(f"/api/entities?start_date={today_str}&end_date={today_str}").json()
+    assert len(entities_range) == 1
+    assert entities_range[0]["name"] == "Dr. Mehta"
+
+    # Future date range (should return empty)
+    entities_future = client.get("/api/entities?start_date=2099-01-01&end_date=2099-01-31").json()
+    assert len(entities_future) == 0
 
     # Summary test
     entity_id = entities_30d[0]["id"]
@@ -186,5 +196,12 @@ def test_entity_summary_and_time_filter(client):
     data = res.json()
     assert data["name"] == "Dr. Mehta"
     assert "Dr. Mehta" in data["summary"]
-    assert "person" in data["summary"]
+    assert "referenced" in data["summary"] or "notes" in data["summary"]
+
+    # Date-filtered dossier test
+    page = client.get(f"/api/entities/{entity_id}?start_date={today_str}&end_date={today_str}").json()
+    assert len(page["items"]) == 2
+
+    page_future = client.get(f"/api/entities/{entity_id}?start_date=2099-01-01&end_date=2099-01-31").json()
+    assert len(page_future["items"]) == 0
 

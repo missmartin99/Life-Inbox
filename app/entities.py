@@ -112,38 +112,115 @@ def extract_entities(text, is_sensitive=False):
     return fallback_entities(text)
 
 
-def fallback_entity_summary(entity_name: str, entity_type: str, items: list) -> str:
-    """Fast, local summary synthesized from timeline and recurring themes."""
+def format_human_range(start_str, end_str):
+    if not start_str and not end_str:
+        return ""
+    from datetime import datetime
+    try:
+        s = datetime.fromisoformat(start_str.split("T")[0]).strftime("%b %Y") if start_str else None
+        e = datetime.fromisoformat(end_str.split("T")[0]).strftime("%b %Y") if end_str else None
+        if s and e:
+            return f"in {s}" if s == e else f"from {s} to {e}"
+        if s:
+            return f"since {s}"
+        if e:
+            return f"up to {e}"
+    except Exception:
+        return f"{start_str} to {end_str}"
+
+
+def detect_entity_themes(items):
+    texts = [(it.get("title") or it.get("raw_text") or "") for it in items]
+    combined = " ".join(texts).lower()
+    themes = []
+    if any(k in combined for k in ["blood test", "clinic", "hospital", "doctor", "dr.", "prescription", "glucose", "health", "dental", "medicine"]):
+        themes.append("medical diagnostic reports and health checkups")
+    if any(k in combined for k in ["coffee", "lunch", "dinner", "brewery", "cafe", "restaurant", "recipe", "food", "dish"]):
+        themes.append("coffee runs and dining logs")
+    if any(k in combined for k in ["trip", "travel", "flight", "hotel", "visit", "fort", "packing", "vacation"]):
+        themes.append("travel planning and trip itineraries")
+    if any(k in combined for k in ["invoice", "payment", "tax", "bank", "receipt", "recharge", "salary", "expense"]):
+        themes.append("expenses and financial records")
+    if any(k in combined for k in ["meeting", "sync", "project", "code", "architecture", "interview", "design"]):
+        themes.append("project discussions and work syncs")
+    if not themes:
+        themes.append("personal reflections and daily notes")
+    return " and ".join(themes[:2])
+
+
+def fallback_entity_summary(
+    entity_name: str,
+    entity_type: str,
+    items: list,
+    start_date: str = None,
+    end_date: str = None,
+) -> str:
+    """Conversational, friendly second-brain summary synthesized from notes and timeline."""
     count = len(items)
     if count == 0:
-        return f"No recorded notes mention {entity_name} yet."
-    dates = [it.get("created_at")[:10] for it in items if it.get("created_at")]
-    first_date = min(dates) if dates else "unknown date"
-    latest_date = max(dates) if dates else "unknown date"
+        if start_date or end_date:
+            range_label = format_human_range(start_date, end_date)
+            return f"You don't have any notes mentioning {entity_name} {range_label}."
+        return f"You don't have any recorded notes mentioning {entity_name} yet."
 
-    item_types = sorted(set(it.get("item_type") for it in items if it.get("item_type")))
-    type_str = ", ".join(item_types) if item_types else "notes"
+    dates = [it.get("created_at") for it in items if it.get("created_at")]
+    if dates:
+        d_sorted = sorted(dates)
+        time_span = format_human_range(d_sorted[0], d_sorted[-1])
+    else:
+        time_span = ""
 
-    time_span = f"on {first_date}" if first_date == latest_date else f"between {first_date} and {latest_date}"
+    theme_desc = detect_entity_themes(items)
 
-    sample = ""
+    clean_snippet = ""
     for it in items:
-        snippet = (it.get("title") or it.get("raw_text") or "").strip()
-        if snippet:
-            sample = snippet[:70].strip() + ("…" if len(snippet) > 70 else "")
+        cand = (it.get("title") or it.get("raw_text") or "").strip()
+        if not cand:
+            continue
+        if ":" in cand:
+            prefix = cand.split(":")[0].strip()
+            if 10 <= len(prefix) <= 75 and not prefix.endswith(("...", "…")):
+                clean_snippet = prefix
+                break
+        first_sentence = re.split(r"\.\s+|\n", cand)[0].strip()
+        if 15 <= len(first_sentence) <= 90 and not first_sentence.endswith(("...", "…")):
+            clean_snippet = first_sentence
             break
-    sample_text = f" Context includes: \"{sample}\"" if sample else ""
-    return f"{entity_name} is a {entity_type} referenced across {count} {type_str} {time_span}.{sample_text}"
+        if len(cand) > 80:
+            cand = cand[:80].rsplit(" ", 1)[0]
+        clean_snippet = cand.rstrip(",.-… ")
+        break
+
+    notes_word = "note" if count == 1 else "notes"
+    if entity_type == "person":
+        res = f"You've referenced {entity_name} in {count} {notes_word} {time_span}, focusing mainly on {theme_desc}."
+    elif entity_type == "place":
+        res = f"{entity_name} appears across {count} of your {notes_word} {time_span}, primarily covering {theme_desc}."
+    else:
+        res = f"You have {count} {notes_word} connected to {entity_name} {time_span}, centered on {theme_desc}."
+
+    if clean_snippet:
+        res += f' For example: "{clean_snippet}".'
+    return res
 
 
-def summarize_entity(entity_name: str, entity_type: str, items: list) -> str:
-    """Synthesize a concise executive dossier summary of an entity from its items."""
+def summarize_entity(
+    entity_name: str,
+    entity_type: str,
+    items: list,
+    start_date: str = None,
+    end_date: str = None,
+) -> str:
+    """Synthesize a warm, conversational executive dossier summary of an entity."""
     if not items:
-        return f"No recorded notes mention {entity_name} yet."
+        if start_date or end_date:
+            range_label = format_human_range(start_date, end_date)
+            return f"You don't have any notes mentioning {entity_name} {range_label}."
+        return f"You don't have any recorded notes mentioning {entity_name} yet."
 
     has_sensitive = any(item.get("is_sensitive") for item in items)
     if has_sensitive or not ai_is_configured():
-        return fallback_entity_summary(entity_name, entity_type, items)
+        return fallback_entity_summary(entity_name, entity_type, items, start_date, end_date)
 
     snippets = []
     for it in items[:15]:
@@ -153,20 +230,25 @@ def summarize_entity(entity_name: str, entity_type: str, items: list) -> str:
             snippets.append(f"- [{created}] {text[:200]}")
 
     if not snippets:
-        return fallback_entity_summary(entity_name, entity_type, items)
+        return fallback_entity_summary(entity_name, entity_type, items, start_date, end_date)
 
-    prompt = f"""Synthesize a concise 2-3 sentence executive dossier summary for the {entity_type} "{entity_name}" based on the user's notes below.
+    time_context = format_human_range(start_date, end_date)
+    time_instruction = f"The user has filtered for notes {time_context}." if time_context else ""
+
+    prompt = f"""You are the user's personal second-brain AI assistant. Write a warm, friendly, conversational 2-sentence summary about {entity_name} ({entity_type}) based on the user's private notes below.
 
 Entity: {entity_name} ({entity_type})
-Total notes: {len(items)}
+Total notes in view: {len(items)}
+{time_instruction}
 
 Notes mentioning this entity:
 {chr(10).join(snippets[:10])}
 
-Requirements:
-- Summarize who/what this {entity_type} is in the context of the user's life (physician, close friend, client, frequent location, store, etc.).
-- Highlight key recurring topics, commitments, or patterns.
-- Keep it factual, objective, and under 60 words. No intro or greetings.
+Guidelines:
+- Talk directly to the user in a natural, helpful, conversational tone (e.g. "You've visited...", "Your notes about Jaipur focus on...").
+- Mention the timeline span and the primary reasons/patterns for interacting with {entity_name}.
+- Avoid robotic database phrases like "is an organization referenced across".
+- Ensure the summary is fully written out, friendly, and under 60 words.
 """
     try:
         reply = ask_ai(prompt, feature="entity_summary")
@@ -175,5 +257,5 @@ Requirements:
     except Exception:
         logger.warning(f"Entity summary failed for {entity_name}; using fallback", exc_info=True)
 
-    return fallback_entity_summary(entity_name, entity_type, items)
+    return fallback_entity_summary(entity_name, entity_type, items, start_date, end_date)
 

@@ -1263,33 +1263,52 @@ def find_item_entities(item_id: int):
 def get_entities(
     type: Optional[str] = Query(None),
     days: Optional[int] = Query(None, ge=1, le=3650),
+    start_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}"),
+    end_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}"),
 ):
-    """All entities with how many items mention them (?type=person&days=30)."""
+    """All entities with how many items mention them (?type=person&start_date=2026-09-01&end_date=2026-09-30)."""
     if type is not None and type not in ENTITY_TYPES:
         raise HTTPException(status_code=400, detail="Unknown entity type")
-    return list_entities(type, days=days)
+    return list_entities(type, days=days, start_date=start_date, end_date=end_date)
 
 
 @app.get("/api/entities/{entity_id}")
-def get_entity(entity_id: int):
-    """ "Everything about X": the entity and every item that mentions it."""
-    page = get_entity_page(entity_id)
+def get_entity(
+    entity_id: int,
+    start_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}"),
+    end_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}"),
+):
+    """ "Everything about X": the entity and every item that mentions it (optionally date-filtered)."""
+    page = get_entity_page(entity_id, start_date=start_date, end_date=end_date)
     if page is None:
         raise HTTPException(status_code=404, detail="Entity not found")
     return page
 
 
 @app.get("/api/entities/{entity_id}/summary")
-def get_entity_summary(entity_id: int):
+def get_entity_summary(
+    entity_id: int,
+    start_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}"),
+    end_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}"),
+):
     """AI-synthesized profile dossier summary for an entity from its connected items."""
-    page = get_entity_page(entity_id)
+    page = get_entity_page(entity_id, start_date=start_date, end_date=end_date)
     if page is None:
         raise HTTPException(status_code=404, detail="Entity not found")
-    summary = summarize_entity(page["name"], page["type"], page.get("items", []))
+    summary = summarize_entity(
+        page["name"],
+        page["type"],
+        page.get("items", []),
+        start_date=start_date,
+        end_date=end_date,
+    )
     return {
         "entity_id": entity_id,
         "name": page["name"],
         "type": page["type"],
+        "start_date": start_date,
+        "end_date": end_date,
+        "item_count": len(page.get("items", [])),
         "summary": summary,
     }
 

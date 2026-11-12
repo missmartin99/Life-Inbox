@@ -369,7 +369,8 @@
           <h2 data-split="words">People, Places & Organizations Treemap</h2>
           <p class="sub lede" data-rev>Interactive proportional treemap scaling entities by note frequency. Click any block to view its connected notes & dossier.</p>
         </div>
-        <div class="feature-bar" style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;">
+        <!-- Interactive Controls Bar: Type Filters & Extract Action -->
+        <div class="feature-bar" style="display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:12px;">
           <div style="display:flex; align-items:center; gap:6px;">
             <span class="mono eyebrow-sm" style="color:var(--text-3)">Type:</span>
             <button type="button" class="chip active entity-type-chip" onclick="filterEntitiesByType('')">All</button>
@@ -377,17 +378,61 @@
             <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('place')">📍 Places</button>
             <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('organization')">🏢 Organizations</button>
           </div>
+          <button type="button" class="secondary" style="margin-left:auto" onclick="scanAllNotesForEntities()">⚡ Extract Entities</button>
+        </div>
 
-          <div style="display:flex; align-items:center; gap:6px; margin-left:8px;">
-            <span class="mono eyebrow-sm" style="color:var(--text-3)">Timeframe:</span>
-            <button type="button" class="chip active entity-time-chip" onclick="filterEntitiesByPeriod(null)">All Time</button>
-            <button type="button" class="chip entity-time-chip" onclick="filterEntitiesByPeriod(7)">7 Days</button>
-            <button type="button" class="chip entity-time-chip" onclick="filterEntitiesByPeriod(30)">30 Days</button>
-            <button type="button" class="chip entity-time-chip" onclick="filterEntitiesByPeriod(90)">90 Days</button>
-            <button type="button" class="chip entity-time-chip" onclick="filterEntitiesByPeriod(365)">1 Year</button>
+        <!-- Interactive Timeline Scrubber & Dual Range Bar -->
+        <div class="timeline-scrubber-card">
+          <div class="timeline-header">
+            <div class="timeline-label-group">
+              <span class="mono eyebrow-sm" style="color:var(--text-3); display:inline-flex; align-items:center; gap:6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                Timeline Window:
+              </span>
+              <span id="timelineRangeDisplay" class="timeline-range-badge mono">All Time (Nov 2025 – Nov 2026)</span>
+            </div>
+            <div class="timeline-quick-pills">
+              <button type="button" class="chip active entity-time-chip" onclick="setTimelinePreset('all')">All Time</button>
+              <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('sep2026')">Sep 2026 (Jaipur Trip)</button>
+              <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('30d')">Past 30 Days</button>
+              <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('90d')">Past 90 Days</button>
+              <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('thisyear')">Year 2026</button>
+            </div>
           </div>
 
-          <button type="button" class="secondary" style="margin-left:auto" onclick="scanAllNotesForEntities()">⚡ Extract Entities</button>
+          <!-- Dual Date Range Slider and Direct Date Selectors -->
+          <div class="timeline-controls-row">
+            <div class="timeline-slider-wrap">
+              <div class="timeline-slider-track">
+                <div class="timeline-track-bg"></div>
+                <div id="timelineSliderHighlight" class="timeline-slider-highlight"></div>
+                <input type="range" id="timelineSliderStart" min="0" max="12" value="0" step="1" aria-label="Start Month" oninput="onTimelineSliderChange()">
+                <input type="range" id="timelineSliderEnd" min="0" max="12" value="12" step="1" aria-label="End Month" oninput="onTimelineSliderChange()">
+              </div>
+              <div class="timeline-ticks">
+                <span>Nov '25</span>
+                <span>Jan '26</span>
+                <span>Mar '26</span>
+                <span>May '26</span>
+                <span>Jul '26</span>
+                <span>Sep '26</span>
+                <span>Nov '26</span>
+              </div>
+            </div>
+
+            <div class="timeline-dates-wrap">
+              <label class="timeline-date-field">
+                <span class="mono eyebrow-xs">Start Date</span>
+                <input type="date" id="timelineDateFrom" value="2025-11-01" min="2025-11-01" max="2026-11-12" onchange="onTimelineDateInputChange()">
+              </label>
+              <span class="timeline-sep">&rarr;</span>
+              <label class="timeline-date-field">
+                <span class="mono eyebrow-xs">End Date</span>
+                <input type="date" id="timelineDateTo" value="2026-11-12" min="2025-11-01" max="2026-11-12" onchange="onTimelineDateInputChange()">
+              </label>
+              <button type="button" class="secondary icon-btn" onclick="setTimelinePreset('all')" title="Reset to All Time">&times;</button>
+            </div>
+          </div>
         </div>
         <p id="entitiesStatus" class="status muted" role="status" aria-live="polite"></p>
 
@@ -397,17 +442,20 @@
             <span class="legend-pill person">👤 People</span>
             <span class="legend-pill place">📍 Places</span>
             <span class="legend-pill organization">🏢 Organizations</span>
-            <span class="legend-hint">Block area proportional to note mentions · Click any tile to inspect</span>
+            <span class="legend-hint">Block area proportional to note mentions in selected window · Click any tile to inspect</span>
           </div>
           <div id="entityTreemap" class="entity-treemap-container" role="region" aria-label="Entities Treemap"></div>
         </div>
 
         <!-- Entity Dossier Modal / View -->
         <div id="entityDossier" class="dossier-panel" hidden>
-          <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
             <div>
               <h3 id="dossierTitle" style="font-size:1.35rem; font-weight:600; color:var(--text);"></h3>
-              <div id="dossierType" style="margin:4px 0 0;"></div>
+              <div style="display:flex; align-items:center; gap:8px; margin-top:4px;">
+                <div id="dossierType"></div>
+                <div id="dossierTimelineNotice" class="dossier-timeline-notice mono"></div>
+              </div>
             </div>
             <button type="button" class="secondary icon-btn" onclick="closeDossier()" title="Close">&times;</button>
           </div>
@@ -421,12 +469,12 @@
               </span>
               <button type="button" class="secondary" id="refreshSummaryBtn" onclick="refreshDossierSummary()" style="font-size:11px; padding:2px 8px;">✨ Refresh Summary</button>
             </div>
-            <p id="dossierSummaryText" class="dossier-summary-body">
+            <div id="dossierSummaryText" class="dossier-summary-body">
               Synthesizing profile summary from connected notes…
-            </p>
+            </div>
           </div>
 
-          <div class="mono" style="font-size:12px; color:var(--muted); margin-top:16px;">Connected Notes & Mention History:</div>
+          <div class="mono" style="font-size:12px; color:var(--muted); margin-top:16px;">Connected Notes in Selected Timeframe:</div>
           <div id="dossierItems" class="dossier-items-list"></div>
         </div>
 
