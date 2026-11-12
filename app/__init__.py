@@ -22,4 +22,5 @@ def _load_dotenv(path: _Path) -> None:
             _os.environ[key] = value
 
 
-_load_dotenv(_Path(__file__).resolve().parent.parent / ".env")
+if not _os.environ.get("LIFE_INBOX_SKIP_DOTENV"):
+    _load_dotenv(_Path(__file__).resolve().parent.parent / ".env")

@@ -40,6 +40,7 @@ from app.capture.pipeline import (
     VOICE_ITEM_TYPE,
 )
 from app.capture.storage import delete_stored_file
+from app.schemas import AnalysisResult
 from app.similarity import find_item_relations
 
 
@@ -628,6 +629,101 @@ def list_notes_from_db() -> list[dict]:
     return notes
 
 
+def list_pending_notes_from_db() -> list[dict]:
+    """Analyzable notes that still need AI analysis.
+
+    A note is pending when it has never been analyzed, or when its content
+    was edited after its latest analysis.
+    """
+    notes = list_notes_from_db()
+    if not notes:
+        return []
+    note_ids = [note["id"] for note in notes]
+    with SessionLocal() as session:
+        analyzed_at = {
+            insight.item_id: insight.updated_at
+            for insight in session.scalars(
+                select(ItemInsightRecord).where(
+                    ItemInsightRecord.item_id.in_(note_ids)
+                )
+            ).all()
+        }
+        edited_at = {
+            item.id: item.updated_at
+            for item in session.scalars(
+                select(InboxItemRecord).where(InboxItemRecord.id.in_(note_ids))
+            ).all()
+        }
+    pending = []
+    for note in notes:
+        insight_time = analyzed_at.get(note["id"])
+        if insight_time is None:
+            pending.append(note)
+            continue
+        edit_time = edited_at.get(note["id"])
+        if edit_time and edit_time > insight_time:
+            pending.append(note)
+    return pending
+
+
+def merge_analysis_results(
+    previous: Optional[dict],
+    new: dict,
+    existing_item_ids: set[int],
+) -> dict:
+    """Combine a new-notes-only analysis with the previously saved view.
+
+    Previous entries survive unless their item was re-analyzed in ``new`` or
+    no longer exists. ToDos survive only when every source item survives.
+    """
+    if previous is None:
+        return new
+
+    new_ids = {
+        note["id"] for bucket in new["buckets"] for note in bucket["notes"]
+    }
+    keep_ids = {
+        note["id"]
+        for bucket in previous["buckets"]
+        for note in bucket["notes"]
+        if note["id"] in existing_item_ids and note["id"] not in new_ids
+    }
+
+    buckets: dict[str, list[dict]] = {}
+    for bucket in previous["buckets"]:
+        for note in bucket["notes"]:
+            if note["id"] in keep_ids:
+                buckets.setdefault(bucket["name"], []).append(note)
+    for bucket in new["buckets"]:
+        buckets.setdefault(bucket["name"], []).extend(bucket["notes"])
+
+    todos = [
+        todo
+        for todo in previous["todos"]
+        if set(todo["source_note_ids"]) <= keep_ids
+    ] + list(new["todos"])
+
+    priority_view = {
+        level: [
+            entry
+            for entry in previous["priority_view"][level]
+            if entry["id"] in keep_ids
+        ]
+        + list(new["priority_view"][level])
+        for level in ("High", "Medium", "Low")
+    }
+
+    merged = {
+        "buckets": [
+            {"name": name, "notes": notes} for name, notes in buckets.items()
+        ],
+        "todos": todos,
+        "priority_view": priority_view,
+        "mode": new["mode"] if new["buckets"] else previous["mode"],
+    }
+    return AnalysisResult.model_validate(merged).model_dump()
+
+
 def update_note_in_db(note_id: int, text: str) -> Optional[dict]:
     item = update_item_in_db(note_id, text)
     return _item_to_note(item) if item is not None else None
@@ -682,7 +778,17 @@ def _normalize_task_text(text: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
-def complete_analysis_run(run_id: int, result: dict) -> dict:
+def complete_analysis_run(
+    run_id: int,
+    result: dict,
+    previous: Optional[dict] = None,
+) -> dict:
+    """Persist a run's insights/tasks and store the displayed analysis.
+
+    ``result`` covers only the items analyzed in this run. When ``previous``
+    (the last saved analysis) is given, the stored/returned view merges the
+    new results into it so earlier items stay visible.
+    """
     completed_at = datetime.now(timezone.utc).isoformat()
     with SessionLocal() as session:
         run = session.get(AnalysisRunRecord, run_id)
@@ -858,9 +964,24 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
                 )
             )
 
+        existing_ids = set(
+            session.scalars(
+                select(InboxItemRecord.id).where(
+                    InboxItemRecord.owner_user_id == require_owner_id()
+                )
+            ).all()
+        )
+        displayed = merge_analysis_results(previous, result, existing_ids)
+        analyzed_item_ids = sorted(
+            note["id"]
+            for bucket in result["buckets"]
+            for note in bucket["notes"]
+        )
+
         fingerprint = compute_inbox_fingerprint(session)
         persisted = {
-            **result,
+            **displayed,
+            "analyzed_item_ids": analyzed_item_ids,
             "inbox_fingerprint": fingerprint,
         }
         run.completed_at = completed_at
@@ -869,7 +990,8 @@ def complete_analysis_run(run_id: int, result: dict) -> dict:
         run.result_json = json.dumps(persisted, ensure_ascii=False)
         session.commit()
         return {
-            **result,
+            **displayed,
+            "analyzed_item_ids": analyzed_item_ids,
             "analysis_run_id": run_id,
             "generated_at": completed_at,
             "is_stale": False,
@@ -1725,4 +1847,5 @@ def get_organization_dashboard() -> dict:
             "needs_review": needs_review[:20],
             "related_items": relations[:20],
             "analysis": latest,
+            "pending_analysis_count": len(list_pending_notes_from_db()),
         }

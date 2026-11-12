@@ -1,5 +1,27 @@
 let isSavingNote = false;
 let isAnalyzingInbox = false;
+let pendingAnalysisCount = null;
+
+// Every control that starts an analysis. The landing-page button keeps its
+// original behavior (analyze everything); the AI Inbox page has both options.
+const analyzeTriggers = [
+  {id: 'analyzeButton', idle: () => 'Analyze Entire Inbox with AI'},
+  {id: 'analyzeAllButton', idle: () => 'Analyze the entire notes with AI'},
+  {id: 'analyzeNewButton', idle: () => analyzeNewButtonLabel()},
+];
+
+function analyzeNewButtonLabel() {
+  return pendingAnalysisCount
+    ? `Analyze new notes (${pendingAnalysisCount})`
+    : 'Analyze new notes';
+}
+
+function updateAnalyzeButton(count) {
+  pendingAnalysisCount = typeof count === 'number' ? count : null;
+  if (isAnalyzingInbox) return;
+  const button = document.getElementById('analyzeNewButton');
+  if (button) button.textContent = analyzeNewButtonLabel();
+}
 const pendingNoteActions = new Set();
 const pendingTaskActions = new Set();
 const itemFilterFields = {
@@ -949,7 +971,21 @@ function renderAnalysis(data) {
   `;
 }
 
+async function refreshPendingAnalysisCount() {
+  try {
+    const data = await fetchJson(
+      '/api/analyze/pending',
+      undefined,
+      'Unable to check for new notes.'
+    );
+    updateAnalyzeButton(data.pending_count);
+  } catch {
+    // The button keeps its previous label if the count cannot be loaded.
+  }
+}
+
 async function loadLatestAnalysis() {
+  refreshPendingAnalysisCount();
   try {
     const data = await fetchJson(
       '/api/analyze/latest',
@@ -977,21 +1013,42 @@ async function loadLatestAnalysis() {
   }
 }
 
-async function analyzeInbox() {
+function setAnalyzeButtonsBusy(busy, clickedId) {
+  for (const trigger of analyzeTriggers) {
+    const button = document.getElementById(trigger.id);
+    if (!button) continue;
+    const idle = trigger.idle();
+    setButtonBusy(
+      trigger.id,
+      busy,
+      trigger.id === clickedId ? 'Analyzing…' : idle,
+      idle
+    );
+  }
+}
+
+// scope 'all' analyzes the entire inbox; 'new' only notes not yet analyzed.
+async function analyzeInbox(scope = 'all', clickedId = null) {
   if (isAnalyzingInbox) return;
 
-  isAnalyzingInbox = true;
-  setButtonBusy(
-    'analyzeButton',
-    true,
-    'Analyzing…',
-    'Analyze Entire Inbox with AI'
+  const analyzeAll = scope !== 'new';
+  const trigger = clickedId || (
+    analyzeAll ? 'analyzeButton' : 'analyzeNewButton'
   );
-  setStatus('analysisStatus', 'Analyzing your saved notes…');
+  isAnalyzingInbox = true;
+  setAnalyzeButtonsBusy(true, trigger);
+  setStatus(
+    'analysisStatus',
+    analyzeAll
+      ? 'Analyzing your entire inbox…'
+      : pendingAnalysisCount === 0
+        ? 'Checking for new notes…'
+        : 'Analyzing your new notes…'
+  );
 
   try {
     const data = await fetchJson(
-      '/api/analyze',
+      analyzeAll ? '/api/analyze?scope=all' : '/api/analyze?scope=new',
       {method: 'POST'},
       'Unable to analyze inbox.'
     );
@@ -1000,7 +1057,16 @@ async function analyzeInbox() {
     await loadTasks();
     await loadTopics();
     await loadDashboard();
-    setStatus('analysisStatus', 'Analysis complete.');
+    const analyzed = (data.analyzed_item_ids || []).length;
+    const noun = analyzed === 1 ? 'note' : 'notes';
+    setStatus(
+      'analysisStatus',
+      analyzeAll
+        ? `Analysis complete. Analyzed all ${analyzed} ${noun}.`
+        : analyzed === 0
+          ? 'No new notes to analyze — everything is already organized.'
+          : `Analysis complete. Analyzed ${analyzed} new ${noun}; earlier results are unchanged.`
+    );
   } catch {
     setStatus(
       'analysisStatus',
@@ -1009,12 +1075,7 @@ async function analyzeInbox() {
     );
   } finally {
     isAnalyzingInbox = false;
-    setButtonBusy(
-      'analyzeButton',
-      false,
-      'Analyzing…',
-      'Analyze Entire Inbox with AI'
-    );
+    setAnalyzeButtonsBusy(false, trigger);
   }
 }
 
@@ -1200,6 +1261,7 @@ async function loadDashboard() {
       undefined,
       'Unable to load dashboard.'
     );
+    updateAnalyzeButton(data.pending_analysis_count);
     const root = document.getElementById('dashboard');
     const section = (title, body) => `
       <div class="panel">

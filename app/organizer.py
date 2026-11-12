@@ -195,7 +195,8 @@ def analyze_inbox_with_openai(notes: list[dict]) -> dict:
         prompt = f"""
 You are the organization engine for a personal Life Inbox.
 
-Analyze ALL saved notes together and turn the messy inbox into a practical dashboard.
+Analyze the notes listed below together and turn them into a practical dashboard.
+These may be only the newest notes of a larger inbox; older notes are handled separately.
 
 Return ONLY valid JSON in exactly this shape:
 
@@ -232,8 +233,8 @@ Return ONLY valid JSON in exactly this shape:
 }}
 
 Rules:
-1. Organize the full inbox, not each note independently.
-2. Every saved note must appear in exactly one bucket.
+1. Organize the listed notes together, not each note independently.
+2. Every listed note must appear in exactly one bucket.
 3. Prefer existing topic/bucket names when they fit: Work, Money & Admin,
    Learning, Shopping & Errands, Health, Travel, Ideas, People,
    Personal / Reference. Invent a new bucket only when genuinely clearer.

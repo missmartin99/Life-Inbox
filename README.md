@@ -5,7 +5,7 @@ It preserves the features already present in the notebook:
 
 - save a text note;
 - list, edit, and delete saved notes;
-- organize the entire inbox into buckets, priorities, and ToDos;
+- organize notes into buckets, priorities, and ToDos (only new or edited notes are analyzed each time);
 - use the OpenAI API when an API key is available;
 - use the notebook's deterministic fallback organizer otherwise.
 
@@ -101,8 +101,11 @@ longer authoritative.
 
 ### Persisted analysis
 
-`POST /api/analyze` still organizes the complete inbox. Successful validated
-results are stored in `analysis_runs`, and each text item's latest category,
+`POST /api/analyze` analyzes only notes that are new, or edited since their last
+analysis, and merges the result into the saved view so earlier notes keep their
+results. When nothing is new it returns the saved analysis without calling the
+AI. Use `POST /api/analyze?scope=all` to re-analyze the whole inbox. Successful
+validated results are stored in `analysis_runs`, and each text item's latest category,
 concise title, and priority are stored in `item_insights`.
 
 `GET /api/analyze/latest` returns the latest successful result without calling

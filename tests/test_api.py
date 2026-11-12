@@ -17,6 +17,7 @@ def analysis_without_metadata(data):
             "generated_at",
             "is_stale",
             "inbox_fingerprint",
+            "analyzed_item_ids",
         }
     }
 
@@ -62,7 +63,13 @@ def test_home_page_loads(client):
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "<title>Life Inbox</title>" in response.text
+    # Landing page keeps its original "analyze everything" button...
     assert "Analyze Entire Inbox with AI" in response.text
+    # ...and the AI Inbox page offers both options.
+    assert 'id="analyzeNewButton"' in response.text
+    assert "Analyze new notes" in response.text
+    assert 'id="analyzeAllButton"' in response.text
+    assert "Analyze the entire notes with AI" in response.text
 
 
 @pytest.mark.parametrize(
@@ -555,6 +562,7 @@ def test_successful_analysis_persists_run_and_item_insight(client):
         assert run.completed_at == analysis["generated_at"]
         stored = json.loads(run.result_json)
         assert stored.pop("inbox_fingerprint") == analysis["inbox_fingerprint"]
+        assert stored.pop("analyzed_item_ids") == [created["id"]]
         assert stored == analysis_without_metadata(analysis)
         assert analysis["is_stale"] is False
         assert insight.analysis_run_id == run.id
@@ -688,7 +696,7 @@ def test_reanalysis_updates_task_by_source_without_changing_status(
     original = client.get("/api/tasks").json()[0]
     client.post(f"/api/tasks/{original['id']}/complete")
 
-    client.post("/api/analyze")
+    client.post("/api/analyze?scope=all")
     tasks = client.get("/api/tasks?status=all").json()
 
     assert len(tasks) == 1
@@ -789,7 +797,7 @@ def test_failed_analysis_keeps_previous_success(client, monkeypatch):
 
     monkeypatch.setattr(main, "analyze_inbox_with_openai", fail_analysis)
 
-    failed_response = client.post("/api/analyze")
+    failed_response = client.post("/api/analyze?scope=all")
 
     assert failed_response.status_code == 500
     assert client.get("/api/analyze/latest").json() == previous
@@ -2045,3 +2053,188 @@ def test_health_includes_config_metadata(client):
     assert payload["status"] == "ok"
     assert "environment" in payload
     assert "database" in payload
+
+
+# --- Incremental analysis: only new / edited notes are analyzed -------------
+
+
+def _record_analyzer_calls(monkeypatch):
+    """Wrap the organizer so tests can see which item IDs it was given."""
+    main = sys.modules["app.main"]
+    original = main.analyze_inbox_with_openai
+    calls = []
+
+    def recording(notes):
+        calls.append([note["id"] for note in notes])
+        return original(notes)
+
+    monkeypatch.setattr(main, "analyze_inbox_with_openai", recording)
+    return calls
+
+
+def _add_note(client, text):
+    return client.post("/api/items", json={"raw_text": text}).json()["id"]
+
+
+def _view_ids(analysis):
+    return sorted(
+        note["id"]
+        for bucket in analysis["buckets"]
+        for note in bucket["notes"]
+    )
+
+
+def test_analyze_only_sends_new_notes_and_keeps_earlier_results(
+    client, monkeypatch
+):
+    calls = _record_analyzer_calls(monkeypatch)
+    first_id = _add_note(client, "Call the team tomorrow")
+
+    first = client.post("/api/analyze").json()
+    assert calls == [[first_id]]
+    assert first["analyzed_item_ids"] == [first_id]
+
+    second_id = _add_note(client, "Buy groceries this weekend")
+    third_id = _add_note(client, "Read an article about vector databases")
+    second = client.post("/api/analyze").json()
+
+    # Only the two unanalyzed notes went to the organizer...
+    assert calls[-1] == [second_id, third_id]
+    assert second["analyzed_item_ids"] == [second_id, third_id]
+    # ...but the saved view still shows all three notes.
+    assert _view_ids(second) == [first_id, second_id, third_id]
+    priority_ids = sorted(
+        entry["id"]
+        for level in ("High", "Medium", "Low")
+        for entry in second["priority_view"][level]
+    )
+    assert priority_ids == [first_id, second_id, third_id]
+    assert client.get("/api/analyze/latest").json() == second
+    assert second["is_stale"] is False
+
+
+def test_analyze_keeps_earlier_todos_and_adds_new_ones(client):
+    first_id = _add_note(client, "Call the team tomorrow")
+    client.post("/api/analyze")
+    second_id = _add_note(client, "Buy groceries this weekend")
+
+    result = client.post("/api/analyze").json()
+
+    todo_sources = sorted(
+        source for todo in result["todos"] for source in todo["source_note_ids"]
+    )
+    assert todo_sources == [first_id, second_id]
+    tasks = client.get("/api/tasks").json()
+    assert len(tasks) == 2
+
+
+def test_analyze_with_nothing_new_does_not_call_the_organizer(
+    client, monkeypatch
+):
+    calls = _record_analyzer_calls(monkeypatch)
+    note_id = _add_note(client, "Call the team tomorrow")
+    first = client.post("/api/analyze").json()
+    assert calls == [[note_id]]
+
+    again = client.post("/api/analyze")
+
+    assert again.status_code == 200
+    data = again.json()
+    assert calls == [[note_id]]
+    assert data["analyzed_item_ids"] == []
+    assert data["analysis_run_id"] == first["analysis_run_id"]
+    assert _view_ids(data) == [note_id]
+
+
+def test_edited_note_is_analyzed_again_but_untouched_notes_are_not(
+    client, monkeypatch
+):
+    calls = _record_analyzer_calls(monkeypatch)
+    edited_id = _add_note(client, "Call the team tomorrow")
+    untouched_id = _add_note(client, "Buy groceries this weekend")
+    client.post("/api/analyze")
+
+    response = client.put(
+        f"/api/items/{edited_id}",
+        json={"raw_text": "Book the dentist next week"},
+    )
+    assert response.status_code == 200
+    result = client.post("/api/analyze").json()
+
+    assert calls[-1] == [edited_id]
+    assert result["analyzed_item_ids"] == [edited_id]
+    assert _view_ids(result) == [edited_id, untouched_id]
+    titles = {
+        note["id"]: note["title"]
+        for bucket in result["buckets"]
+        for note in bucket["notes"]
+    }
+    assert "dentist" in titles[edited_id].lower()
+    # The edited note's old ToDo is replaced, not duplicated.
+    todo_texts = [todo["task"] for todo in result["todos"]]
+    assert not any("team" in text.lower() for text in todo_texts)
+
+
+def test_deleted_note_disappears_from_analysis_without_new_ai_call(
+    client, monkeypatch
+):
+    calls = _record_analyzer_calls(monkeypatch)
+    keep_id = _add_note(client, "Buy groceries this weekend")
+    gone_id = _add_note(client, "Call the team tomorrow")
+    client.post("/api/analyze")
+    assert client.delete(f"/api/items/{gone_id}").status_code == 204
+
+    result = client.post("/api/analyze").json()
+
+    assert _view_ids(result) == [keep_id]
+    assert result["analyzed_item_ids"] == []
+    # Nothing new to send: the organizer is only called with an empty list.
+    assert all(call == [] for call in calls[1:])
+    assert result["is_stale"] is False
+
+
+def test_scope_all_reanalyzes_the_whole_inbox(client, monkeypatch):
+    calls = _record_analyzer_calls(monkeypatch)
+    first_id = _add_note(client, "Call the team tomorrow")
+    second_id = _add_note(client, "Buy groceries this weekend")
+    client.post("/api/analyze")
+
+    result = client.post("/api/analyze?scope=all").json()
+
+    assert calls[-1] == [first_id, second_id]
+    assert result["analyzed_item_ids"] == [first_id, second_id]
+    assert _view_ids(result) == [first_id, second_id]
+
+
+def test_analyze_rejects_unknown_scope(client):
+    assert client.post("/api/analyze?scope=bogus").status_code == 422
+
+
+def test_dashboard_reports_pending_analysis_count(client):
+    assert client.get("/api/dashboard").json()["pending_analysis_count"] == 0
+
+    _add_note(client, "Call the team tomorrow")
+    _add_note(client, "Buy groceries this weekend")
+    assert client.get("/api/dashboard").json()["pending_analysis_count"] == 2
+
+    client.post("/api/analyze")
+    assert client.get("/api/dashboard").json()["pending_analysis_count"] == 0
+
+    _add_note(client, "Read an article about vector databases")
+    assert client.get("/api/dashboard").json()["pending_analysis_count"] == 1
+
+
+def test_pending_analysis_endpoint_lists_unanalyzed_ids(client):
+    assert client.get("/api/analyze/pending").json() == {
+        "pending_count": 0,
+        "pending_item_ids": [],
+    }
+    first_id = _add_note(client, "Call the team tomorrow")
+    second_id = _add_note(client, "Buy groceries this weekend")
+    assert client.get("/api/analyze/pending").json() == {
+        "pending_count": 2,
+        "pending_item_ids": [first_id, second_id],
+    }
+
+    client.post("/api/analyze")
+    assert client.get("/api/analyze/pending").json()["pending_count"] == 0

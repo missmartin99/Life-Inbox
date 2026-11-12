@@ -17,7 +17,11 @@ Open http://127.0.0.1:8000
 - [ ] Save a note → appears under Raw saved notes
 - [ ] Edit a note → text updates; analysis status becomes stale if prior analysis existed
 - [ ] Delete a note → removed; linked orphan task disappears after analyze+delete
-- [ ] Analyze Entire Inbox → buckets, todos, priority view, mode shown
+- [ ] Landing page "Analyze Entire Inbox with AI" → analyzes every note
+- [ ] AI Inbox page "Analyze the entire notes with AI" → analyzes every note
+- [ ] AI Inbox page "Analyze new notes" → buckets, todos, priority view, mode shown
+- [ ] Add two more notes, "Analyze new notes" → only those two are analyzed; earlier notes keep their results
+- [ ] "Analyze new notes" again with nothing new → "No new notes to analyze"
 - [ ] Reload page → latest analysis restored; tasks persist
 - [ ] Complete / dismiss / reopen a task; filter by status
 - [ ] Re-analyze after completing a task → task status unchanged

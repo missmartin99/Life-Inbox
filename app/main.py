@@ -47,6 +47,7 @@ from app.database import (
     init_db,
     list_items_from_db,
     list_notes_from_db,
+    list_pending_notes_from_db,
     list_relations_from_db,
     list_tasks_from_db,
     list_topics_from_db,
@@ -1190,15 +1191,44 @@ def get_latest_analysis():
     return result
 
 
+@app.get("/api/analyze/pending")
+def get_pending_analysis():
+    """How many notes are new or edited since their last analysis."""
+    try:
+        pending = list_pending_notes_from_db()
+    except Exception as exc:
+        logger.exception("Failed to count notes pending analysis")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to check for new notes. Please try again.",
+        ) from exc
+    return {
+        "pending_count": len(pending),
+        "pending_item_ids": [note["id"] for note in pending],
+    }
+
+
 @app.post("/api/analyze", response_model=PersistedAnalysis)
-def analyze_inbox():
+def analyze_inbox(scope: str = Query("new", pattern="^(new|all)$")):
+    """Analyze notes that are new (or edited) since their last analysis.
+
+    ``scope=all`` re-analyzes the whole inbox and replaces the saved view.
+    """
     run_id = None
     try:
+        previous = None
+        if scope == "new":
+            previous = get_latest_successful_analysis()
+            notes = list_pending_notes_from_db()
+            if previous is not None and not notes and not previous["is_stale"]:
+                return {**previous, "analyzed_item_ids": []}
+        else:
+            notes = list_notes_from_db()
+
         run_id = start_analysis_run()
-        notes = list_notes_from_db()
         raw_result = analyze_inbox_with_openai(notes)
         result = validate_analysis_result(raw_result, notes)
-        return complete_analysis_run(run_id, result)
+        return complete_analysis_run(run_id, result, previous=previous)
     except Exception as exc:
         if run_id is not None:
             try:

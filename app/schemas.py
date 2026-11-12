@@ -177,6 +177,8 @@ class PersistedAnalysis(AnalysisResult):
     generated_at: str
     is_stale: bool = False
     inbox_fingerprint: Optional[str] = None
+    # Items the most recent run actually analyzed (it may be a subset).
+    analyzed_item_ids: List[int] = Field(default_factory=list)
 
 
 TaskStatus = Literal["open", "completed", "dismissed"]

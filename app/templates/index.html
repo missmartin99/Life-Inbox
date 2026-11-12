@@ -312,8 +312,12 @@
           <h2 data-split="words">AI-organized inbox</h2>
           <p id="analysisStatus" class="status muted lede" role="status" aria-live="polite"></p>
         </div>
+        <div class="analyze-actions" data-rev>
+          <button id="analyzeNewButton" type="button" onclick="analyzeInbox('new')">Analyze new notes</button>
+          <button id="analyzeAllButton" type="button" class="secondary" onclick="analyzeInbox('all')">Analyze the entire notes with AI</button>
+        </div>
         <div id="aiOutput" class="panel" data-rev>
-          <span class="muted">Save a few notes, then click “Analyze Entire Inbox with AI”. Saved analysis reloads on refresh and is marked stale if the inbox changes.</span>
+          <span class="muted">Save a few notes, then click “Analyze new notes” to organize only the notes you haven’t analyzed yet (or have edited), or “Analyze the entire notes with AI” to redo everything. Saved analysis reloads on refresh and is marked stale if the inbox changes.</span>
         </div>
       </div>
     </section>
