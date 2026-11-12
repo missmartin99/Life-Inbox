@@ -1,175 +1,461 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0A0A0A" />
   <title>Life Inbox</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://api.fontshare.com" />
+  <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@300;400&display=swap" />
+  <!-- Satoshi (Fontshare, ITF Free Font License): the display face for the "Life Inbox" wordmark. -->
+  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@700&display=swap" />
   <link rel="stylesheet" href="/static/styles.css" />
+  <script>
+    // Decide before first paint whether the landing intro plays, so nothing flashes.
+    (function () {
+      var root = document.documentElement;
+      var tab = window.location.hash.replace('#', '');
+      root.classList.add('js');
+      if ((tab === '' || tab === 'capture') && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        root.classList.add('intro-play');
+      }
+      // Failsafe: if ui.js never runs, drop the hidden-until-animated states.
+      window.setTimeout(function () {
+        if (!window.lifeInboxUiReady) root.classList.remove('js', 'intro-play', 'intro-ready');
+      }, 4000);
+    })();
+  </script>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Life Inbox</h1>
-    <p class="sub">Capture first. Organize the whole inbox with AI when you are ready.</p>
-    <div class="auth-bar">
-      <span id="authUser" class="muted">Checking session…</span>
-      <form id="devLoginForm" class="auth-form" onsubmit="devLogin(event)">
-        <label>
-          Dev login email
-          <input id="devLoginEmail" type="email" maxlength="200" placeholder="you@example.com" required />
-        </label>
-        <button type="submit" class="secondary">Sign in</button>
-        <button type="button" class="secondary" onclick="logoutSession()">Sign out</button>
-      </form>
-      <p id="authStatus" class="status muted" role="status" aria-live="polite"></p>
-    </div>
+  <div class="rail" aria-hidden="true"></div>
 
-    <textarea id="noteText" placeholder="Example: Met Rohan yesterday. He recommended Atomic Habits. Need to order it this weekend. Also ask him about that Gurgaon restaurant."></textarea>
-    <br />
-    <button id="addNoteButton" type="button" onclick="addNote()">Add Note</button>
-    <div class="url-capture">
-      <label for="urlText">Capture URL</label>
-      <input id="urlText" type="url" maxlength="2000" placeholder="https://example.com/article" />
-      <button id="addUrlButton" type="button" class="secondary" onclick="addUrl()">Save URL</button>
-    </div>
-    <div class="pdf-capture">
-      <label for="pdfFile">Upload PDF</label>
-      <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
-      <button id="addPdfButton" type="button" class="secondary" onclick="addPdf()">Upload PDF</button>
-    </div>
-    <div class="image-capture">
-      <label for="imageFile">Upload image / screenshot</label>
-      <input id="imageFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" />
-      <button id="addImageButton" type="button" class="secondary" onclick="addImage()">Upload image</button>
-    </div>
-    <div class="voice-capture">
-      <label for="voiceFile">Voice note</label>
-      <div class="voice-actions">
-        <button id="recordVoiceButton" type="button" class="secondary" onclick="toggleVoiceRecording()">Record</button>
-        <input id="voiceFile" type="file" accept="audio/*,video/webm,.webm,.wav,.mp3,.m4a,.ogg" />
-        <button id="addVoiceButton" type="button" class="secondary" onclick="addVoice()">Upload audio</button>
+  <nav class="topnav" aria-label="Primary">
+    <div class="wrap nav-row">
+      <a class="brand" href="#" data-goto="capture">Life<span>Inbox</span></a>
+
+      <div class="tabs" role="tablist" aria-label="Life Inbox sections">
+        <button type="button" role="tab" class="tab" id="tab-capture" data-tab="capture" aria-controls="panel-capture" aria-selected="true"><span class="tab-no">01</span>Capture<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-ask" data-tab="ask" aria-controls="panel-ask" aria-selected="false" tabindex="-1"><span class="tab-no">02</span>Ask<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-dashboard" data-tab="dashboard" aria-controls="panel-dashboard" aria-selected="false" tabindex="-1"><span class="tab-no">03</span>Dashboard<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-ai" data-tab="ai" aria-controls="panel-ai" aria-selected="false" tabindex="-1"><span class="tab-no">04</span>AI Inbox<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-tasks" data-tab="tasks" aria-controls="panel-tasks" aria-selected="false" tabindex="-1"><span class="tab-no">05</span>Tasks<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-notes" data-tab="notes" aria-controls="panel-notes" aria-selected="false" tabindex="-1"><span class="tab-no">06</span>Notes<i class="tab-dot" aria-hidden="true"></i></button>
+        <span class="tab-indicator" aria-hidden="true"></span>
       </div>
-      <p id="voiceStatus" class="status muted" role="status" aria-live="polite"></p>
-    </div>
-    <button id="analyzeButton" type="button" class="secondary" onclick="analyzeInbox()">Analyze Entire Inbox with AI</button>
-    <p id="noteStatus" class="status muted" role="status" aria-live="polite"></p>
 
-    <h2>Ask My Inbox</h2>
-    <p class="sub">Search and ask questions grounded in your saved notes, URLs, and PDFs.</p>
-    <form id="askForm" class="ask-form" onsubmit="askInbox(event)">
-      <label>
-        Question
-        <input id="askQuestion" type="search" maxlength="500" placeholder="What did I plan about car insurance?" required />
-      </label>
-      <div class="ask-examples">
-        <button type="button" class="secondary" onclick="fillAskExample('What deadlines or renewals did I mention?')">Renewals</button>
-        <button type="button" class="secondary" onclick="fillAskExample('What books or articles should I read?')">Reading list</button>
-        <button type="button" class="secondary" onclick="fillAskExample('What restaurant recommendations do I have?')">Restaurants</button>
+      <div class="nav-actions">
+        <button type="button" id="soundToggle" class="secondary icon-btn" aria-pressed="true" aria-label="Sound" title="Sound on">
+          <svg class="ico-sound-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z"/><path d="M15.5 9.2a4 4 0 0 1 0 5.6M18.2 6.6a7.6 7.6 0 0 1 0 10.8"/></svg>
+          <svg class="ico-sound-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg>
+        </button>
+        <button type="button" id="accountToggle" class="secondary account-toggle" aria-expanded="false" aria-controls="accountPanel">
+          <span class="account-dot" aria-hidden="true"></span>Account
+        </button>
+        <div id="accountPanel" class="account-panel" hidden>
+          <div class="auth-bar">
+            <div class="mono eyebrow-sm">Session</div>
+            <span id="authUser" class="muted">Checking session…</span>
+            <form id="devLoginForm" class="auth-form" onsubmit="devLogin(event)">
+              <label>
+                Dev login email
+                <input id="devLoginEmail" type="email" maxlength="200" placeholder="you@example.com" required />
+              </label>
+              <div class="auth-actions">
+                <button type="submit" class="secondary">Sign in</button>
+                <button type="button" class="secondary" onclick="logoutSession()">Sign out</button>
+              </div>
+            </form>
+            <p id="authStatus" class="status muted" role="status" aria-live="polite"></p>
+          </div>
+        </div>
       </div>
-      <button type="submit" id="askButton">Ask</button>
-    </form>
-    <p id="askStatus" class="status muted" role="status" aria-live="polite"></p>
-    <div id="askOutput" class="panel ask-output">
-      <span class="muted">Answers cite inbox items. If evidence is weak, Life Inbox says so instead of guessing.</span>
     </div>
+  </nav>
 
-    <h2>Organized dashboard</h2>
-    <p id="dashboardStatus" class="status muted" role="status" aria-live="polite"></p>
-    <div id="dashboard" class="dashboard">
-      <span class="muted">Analyze your inbox to populate topics, priorities, and related items.</span>
+  <main class="panels">
+    <!-- 01 · Capture (landing) -->
+    <section id="panel-capture" class="tab-panel" role="tabpanel" aria-labelledby="tab-capture" data-panel="capture">
+      <div class="hero">
+        <canvas id="ribbon" class="ribbon" aria-hidden="true"></canvas>
+        <div class="hero-veil" aria-hidden="true"></div>
+        <div class="wrap hero-inner">
+          <h1 class="hero-title" data-split="glyph">Life Inbox</h1>
+          <p class="sub hero-tagline" data-rev>Capture first. Organize the whole inbox with AI when you are ready.</p>
+
+          <div class="composer-stage" data-rev>
+          <!-- Jin, a grey Persian who naps on the composer (behaviour in playful.js). -->
+          <div class="cat-wrap" data-mood="content">
+            <div class="cat" role="button" tabindex="0" aria-haspopup="menu" aria-controls="catMenu"
+                 aria-label="Jin the cat. Right-click, or press Shift+F10, to pet, feed, play with or rename her.">
+              <svg class="cat-svg" viewBox="0 0 120 66" aria-hidden="true">
+                <defs>
+                  <linearGradient id="jinFur" gradientUnits="userSpaceOnUse" x1="0" y1="20" x2="0" y2="62">
+                    <stop offset="0" stop-color="#BCC4D3"/>
+                    <stop offset="1" stop-color="#8E97AA"/>
+                  </linearGradient>
+                  <radialGradient id="jinIris" cx="45%" cy="35%" r="75%">
+                    <stop offset="0" stop-color="#C7D2FE"/>
+                    <stop offset="0.5" stop-color="#818CF8"/>
+                    <stop offset="1" stop-color="#3730A3"/>
+                  </radialGradient>
+                </defs>
+                <ellipse class="cat-shadow" cx="64" cy="60.5" rx="46" ry="3"/>
+                <g class="cat-yarn">
+                  <circle cx="6" cy="56" r="4.6"/>
+                  <path d="M2.4 54 C4.6 56 7.4 56 9.6 54 M1.8 57.4 C4.4 59.4 7.6 59.4 10.2 57.2 M4.2 51.8 C3.2 55 3.6 58.6 6 60.6"/>
+                </g>
+                <g class="cat-torso">
+                  <path class="jin-fur" d="M34 60 C30 52 34 40 44 33 C46 29 50 28 53 29 C56 25 62 24 65 26 C69 22 75 23 78 25.5 C82 23 88 25 90 28 C95 28 100 31 101 35 C106 37 109 43 108 48 C110 53 106 59 100 60 Z"/>
+                  <path class="jin-fluff" d="M52 36 q5 -2 9 1 M66 32.5 q5 -2 9 1 M80 34.5 q5 -2 9 1 M93 41 q4 -1 7 2 M60 46 q5 -2 9 1 M76 48 q5 -2 9 1 M90 51 q4 -1 7 2"/>
+                  <g class="cat-tail">
+                    <path class="jin-tail-outline" d="M102 50 C108 58 96 62.5 78 62 C66 61.6 58 60 54 57"/>
+                    <path class="jin-tail" d="M102 50 C108 58 96 62.5 78 62 C66 61.6 58 60 54 57"/>
+                    <path class="jin-tail-fluff" d="M92 59.5 q3 -2 6 0 M80 60.5 q3 -2 6 0 M68 59.8 q3 -2 6 0"/>
+                  </g>
+                </g>
+                <g class="cat-head">
+                  <path class="jin-ruff" d="M10 44 C6 36 10 26 18 22 C22 18 30 17 34 20 C40 19 46 24 47 30 C51 34 51 42 48 47 C48 53 42 58 36 58 L20 58 C14 57 9 51 10 44 Z"/>
+                  <g class="cat-ear cat-ear-l">
+                    <path class="jin-fur" d="M13 33 C11 27 12 22 15 20 C19 22 22 25 23 27 Z"/>
+                    <path class="cat-ear-in" d="M15 30 C14 27 14.6 24 16 23 C18 24.5 19.6 26 20.2 27.3 Z"/>
+                  </g>
+                  <g class="cat-ear cat-ear-r">
+                    <path class="jin-fur" d="M33 27 C36 24 40 21 43 20 C45 23 45 28 43 33 Z"/>
+                    <path class="cat-ear-in" d="M36 27.4 C38 25.8 40 24.5 41.6 23.6 C42.6 25.6 42.6 28 41.6 30.4 Z"/>
+                  </g>
+                  <path class="jin-fur" d="M28 25 C38 25 45 31 45 39 C45 48 38 54 28 54 C18 54 11 48 11 39 C11 31 18 25 28 25 Z"/>
+                  <ellipse class="jin-muzzle" cx="24.6" cy="45.6" rx="5" ry="3.6"/>
+                  <ellipse class="jin-muzzle" cx="32.4" cy="45.6" rx="5" ry="3.6"/>
+                  <ellipse class="cat-blush" cx="17.5" cy="44.8" rx="3" ry="1.8"/>
+                  <ellipse class="cat-blush" cx="39.5" cy="44.8" rx="3" ry="1.8"/>
+                  <path class="cat-sleep-eye cat-sleep-eye-l" d="M18.5 39.5 q4 3.2 8 0"/>
+                  <path class="cat-sleep-eye cat-sleep-eye-r" d="M30 39.5 q4 3.2 8 0"/>
+                  <g class="cat-eyes">
+                    <g class="cat-eye cat-eye-l">
+                      <ellipse class="cat-iris" cx="22.5" cy="39.5" rx="3.9" ry="4.3"/>
+                      <ellipse class="cat-pupil" cx="22.5" cy="40" rx="1.6" ry="3"/>
+                      <circle class="cat-glint" cx="23.8" cy="37.9" r="1.1"/>
+                    </g>
+                    <g class="cat-eye cat-eye-r">
+                      <ellipse class="cat-iris" cx="34" cy="39.5" rx="3.9" ry="4.3"/>
+                      <ellipse class="cat-pupil" cx="34" cy="40" rx="1.6" ry="3"/>
+                      <circle class="cat-glint" cx="35.3" cy="37.9" r="1.1"/>
+                    </g>
+                    <path class="cat-lid" d="M18.3 35 H26.7 V39.5 Q22.5 37.6 18.3 39.5 Z M29.8 35 H38.2 V39.5 Q34 37.6 29.8 39.5 Z"/>
+                  </g>
+                  <path class="cat-happy-eye" d="M19 41 q3.5 -4 7 0 M30.5 41 q3.5 -4 7 0"/>
+                  <path class="cat-nose" d="M26.9 43.6 h3.2 q-0.4 1.4 -1.6 1.9 q-1.2 -0.5 -1.6 -1.9 Z"/>
+                  <path class="cat-mouth" d="M28.5 45.5 q0 1.6 -2 1.6 M28.5 45.5 q0 1.6 2 1.6"/>
+                  <ellipse class="cat-mouth-open" cx="28.5" cy="48" rx="2.3" ry="2.8"/>
+                  <path class="cat-whisker" d="M21 45.5 L11 44 M21 47 L12 48.5 M36 45.5 L46 44 M36 47 L45 48.5"/>
+                </g>
+                <g class="cat-paws">
+                  <g class="cat-paw-play">
+                    <ellipse class="jin-paw" cx="22" cy="57" rx="6.5" ry="3.4"/>
+                    <path class="jin-toe" d="M19.6 58.8 v-1.8 M22 59.2 v-1.8 M24.4 58.8 v-1.8"/>
+                  </g>
+                  <ellipse class="jin-paw" cx="34" cy="57.5" rx="6.5" ry="3.4"/>
+                  <path class="jin-toe" d="M31.6 59.3 v-1.8 M34 59.7 v-1.8 M36.4 59.3 v-1.8"/>
+                </g>
+              </svg>
+            </div>
+            <span class="cat-zzz" aria-hidden="true"><i>z</i><i>z</i><i>Z</i></span>
+            <span class="cat-bubble" role="status" aria-live="polite"></span>
+          </div>
+
+          <!-- One composer: the icons switch what is captured; each mode keeps its original input and button. -->
+          <div class="composer" data-mode="note">
+            <div class="composer-body">
+              <div class="mode-pane" data-pane="note">
+                <textarea id="noteText" aria-label="Note text" placeholder="Capture a thought, task, or idea…"></textarea>
+              </div>
+              <div class="mode-pane url-capture" data-pane="url" hidden>
+                <label for="urlText" class="pane-label">Capture URL</label>
+                <input id="urlText" type="url" maxlength="2000" placeholder="https://example.com/article" />
+              </div>
+              <div class="mode-pane pdf-capture" data-pane="pdf" hidden>
+                <div class="drop">
+                  <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
+                  <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5"/><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg>
+                  <label for="pdfFile" class="drop-title">Upload PDF</label>
+                  <span class="drop-hint">Drop a PDF here, or click to browse</span>
+                </div>
+              </div>
+              <div class="mode-pane image-capture" data-pane="image" hidden>
+                <div class="drop">
+                  <input id="imageFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif" />
+                  <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5"/><path d="M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg>
+                  <label for="imageFile" class="drop-title">Upload image / screenshot</label>
+                  <span class="drop-hint">PNG, JPG, WebP or GIF — drop it here, or click to browse</span>
+                </div>
+              </div>
+              <div class="mode-pane voice-capture" data-pane="voice" hidden>
+                <div class="voice-row">
+                  <button id="recordVoiceButton" type="button" class="secondary record" onclick="toggleVoiceRecording()">Record</button>
+                  <div class="drop drop-inline">
+                    <input id="voiceFile" type="file" accept="audio/*,video/webm,.webm,.wav,.mp3,.m4a,.ogg" />
+                    <label for="voiceFile" class="drop-title">Voice note</label>
+                    <span class="drop-hint">or drop an audio file here</span>
+                  </div>
+                </div>
+                <p id="voiceStatus" class="status muted" role="status" aria-live="polite"></p>
+              </div>
+            </div>
+
+            <div class="composer-bar">
+              <div class="modes" role="group" aria-label="What to capture">
+                <button type="button" class="mode" data-mode="note" aria-pressed="true" title="Text note">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg><span>Note</span>
+                </button>
+                <button type="button" class="mode" data-mode="url" aria-pressed="false" title="Capture URL">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg><span>Link</span>
+                </button>
+                <button type="button" class="mode" data-mode="pdf" aria-pressed="false" title="Upload PDF">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg><span>PDF</span>
+                </button>
+                <button type="button" class="mode" data-mode="image" aria-pressed="false" title="Upload image / screenshot">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg><span>Image</span>
+                </button>
+                <button type="button" class="mode" data-mode="voice" aria-pressed="false" title="Voice note">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>Voice</span>
+                </button>
+              </div>
+              <div class="sends">
+                <button id="addNoteButton" type="button" class="send magnetic" data-send="note" title="Add Note" onclick="addNote()">Add Note</button>
+                <button id="addUrlButton" type="button" class="send magnetic" data-send="url" title="Save URL" onclick="addUrl()" hidden>Save URL</button>
+                <button id="addPdfButton" type="button" class="send magnetic" data-send="pdf" title="Upload PDF" onclick="addPdf()" hidden>Upload PDF</button>
+                <button id="addImageButton" type="button" class="send magnetic" data-send="image" title="Upload image" onclick="addImage()" hidden>Upload image</button>
+                <button id="addVoiceButton" type="button" class="send magnetic" data-send="voice" title="Upload audio" onclick="addVoice()" hidden>Upload audio</button>
+              </div>
+            </div>
+          </div>
+          </div>
+          <p id="noteStatus" class="status muted composer-status" role="status" aria-live="polite"></p>
+
+          <div class="quick-actions" data-rev>
+            <button id="analyzeButton" type="button" class="secondary quick quick-analyze" onclick="analyzeInbox()">Analyze Entire Inbox with AI</button>
+            <button type="button" class="secondary quick quick-ask" data-goto="ask">Ask my inbox</button>
+            <button type="button" class="secondary quick quick-dashboard" data-goto="dashboard">Open dashboard</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 02 · Ask -->
+    <section id="panel-ask" class="tab-panel" role="tabpanel" aria-labelledby="tab-ask" data-panel="ask" hidden>
+      <div class="wrap band">
+        <div class="eyebrow" data-rev><span class="mono">02 · Ask</span></div>
+        <div class="head">
+          <h2 data-split="words">Ask My Inbox</h2>
+          <p class="sub lede" data-rev>Search and ask questions grounded in your saved notes, URLs, and PDFs.</p>
+        </div>
+        <form id="askForm" class="ask-form" onsubmit="askInbox(event)" data-rev>
+          <label>
+            Question
+            <input id="askQuestion" type="search" maxlength="500" placeholder="What did I plan about car insurance?" required />
+          </label>
+          <div class="ask-row">
+            <div class="ask-examples">
+              <button type="button" class="secondary chip" onclick="fillAskExample('What deadlines or renewals did I mention?')">Renewals</button>
+              <button type="button" class="secondary chip" onclick="fillAskExample('What books or articles should I read?')">Reading list</button>
+              <button type="button" class="secondary chip" onclick="fillAskExample('What restaurant recommendations do I have?')">Restaurants</button>
+            </div>
+            <button type="submit" id="askButton" class="magnetic">Ask</button>
+          </div>
+        </form>
+        <p id="askStatus" class="status muted" role="status" aria-live="polite"></p>
+        <div id="askOutput" class="panel ask-output" data-rev>
+          <span class="muted">Answers cite inbox items. If evidence is weak, Life Inbox says so instead of guessing.</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 03 · Dashboard -->
+    <section id="panel-dashboard" class="tab-panel" role="tabpanel" aria-labelledby="tab-dashboard" data-panel="dashboard" hidden>
+      <div class="wrap band">
+        <div class="eyebrow" data-rev><span class="mono">03 · Dashboard</span></div>
+        <div class="head">
+          <h2 data-split="words">Organized dashboard</h2>
+          <p id="dashboardStatus" class="status muted lede" role="status" aria-live="polite"></p>
+        </div>
+        <div id="dashboard" class="dashboard" data-rev>
+          <span class="muted">Analyze your inbox to populate topics, priorities, and related items.</span>
+        </div>
+      </div>
+
+      <div class="wrap band band-follow">
+        <div class="eyebrow" data-rev><span class="mono">Spaces</span></div>
+        <div class="head">
+          <h2 data-split="words">Topics / spaces</h2>
+          <form id="topicForm" class="topic-form" onsubmit="createTopic(event)" data-rev>
+            <label>
+              New topic
+              <input id="topicName" maxlength="80" placeholder="e.g. Home projects" required />
+            </label>
+            <button type="submit">Add topic</button>
+          </form>
+        </div>
+        <p id="topicStatus" class="status muted" role="status" aria-live="polite"></p>
+        <div id="topics" data-rev></div>
+      </div>
+    </section>
+
+    <!-- 04 · AI Inbox -->
+    <section id="panel-ai" class="tab-panel" role="tabpanel" aria-labelledby="tab-ai" data-panel="ai" hidden>
+      <div class="wrap band">
+        <div class="eyebrow" data-rev><span class="mono">04 · AI Inbox</span></div>
+        <div class="head">
+          <h2 data-split="words">AI-organized inbox</h2>
+          <p id="analysisStatus" class="status muted lede" role="status" aria-live="polite"></p>
+        </div>
+        <div id="aiOutput" class="panel" data-rev>
+          <span class="muted">Save a few notes, then click “Analyze Entire Inbox with AI”. Saved analysis reloads on refresh and is marked stale if the inbox changes.</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 05 · Tasks -->
+    <section id="panel-tasks" class="tab-panel" role="tabpanel" aria-labelledby="tab-tasks" data-panel="tasks" hidden>
+      <div class="wrap band">
+        <div class="eyebrow" data-rev><span class="mono">05 · Attention</span></div>
+        <div class="head">
+          <h2 data-split="words">Attention</h2>
+          <p class="sub lede" data-rev>Today, upcoming, overdue, and unscheduled open tasks. Dates keep the original phrase and require confirmation when ambiguous.</p>
+        </div>
+        <p id="briefingStatus" class="status muted" role="status" aria-live="polite"></p>
+        <div id="briefing" class="panel briefing" data-rev>
+          <span class="muted">Open tasks with timing appear here after analysis.</span>
+        </div>
+        <div id="attention" class="dashboard attention-board" data-rev></div>
+        <p id="calendarStatus" class="status muted" role="status" aria-live="polite"></p>
+        <div id="calendarPreview" class="panel" data-rev>
+          <span class="muted">Calendar previews require confirmation and never write to Google without owner approval.</span>
+        </div>
+      </div>
+
+      <div class="wrap band band-follow">
+        <div class="eyebrow" data-rev><span class="mono">Task list</span></div>
+        <div class="head">
+          <h2 data-split="words">Tasks</h2>
+          <div class="task-toolbar" data-rev>
+            <label for="taskStatusFilter">Show</label>
+            <select id="taskStatusFilter" onchange="changeTaskStatusFilter()">
+              <option value="open">Open</option>
+              <option value="completed">Completed</option>
+              <option value="dismissed">Dismissed</option>
+            </select>
+          </div>
+        </div>
+        <p id="taskStatus" class="status muted" role="status" aria-live="polite"></p>
+        <div id="tasks" class="card-list"></div>
+      </div>
+    </section>
+
+    <!-- 06 · Notes -->
+    <section id="panel-notes" class="tab-panel" role="tabpanel" aria-labelledby="tab-notes" data-panel="notes" hidden>
+      <div class="wrap band">
+        <div class="eyebrow" data-rev><span class="mono">06 · Notes</span></div>
+        <div class="head">
+          <h2 data-split="words">Raw saved notes</h2>
+        </div>
+        <form id="itemSearchForm" class="search-toolbar" onsubmit="applyItemFilters(event)" data-rev>
+          <label class="search-field">
+            Search
+            <input id="itemSearch" type="search" maxlength="200" placeholder="Text or title" />
+          </label>
+          <label>
+            Type
+            <select id="itemTypeFilter">
+              <option value="">All</option>
+              <option value="text">Text</option>
+              <option value="url">URL</option>
+              <option value="pdf">PDF</option>
+              <option value="image">Image</option>
+              <option value="voice">Voice</option>
+            </select>
+          </label>
+          <label>
+            Category
+            <select id="categoryFilter">
+              <option value="">All</option>
+            </select>
+          </label>
+          <label>
+            Priority
+            <select id="priorityFilter">
+              <option value="">All</option>
+              <option value="High">High</option>
+              <option value="Medium">Medium</option>
+              <option value="Low">Low</option>
+            </select>
+          </label>
+          <label>
+            Processing
+            <select id="processingStatusFilter">
+              <option value="">All</option>
+              <option value="ready">Ready</option>
+              <option value="processing">Processing</option>
+              <option value="failed">Failed</option>
+            </select>
+          </label>
+          <div class="search-actions">
+            <button type="submit">Search</button>
+            <button type="button" class="secondary" onclick="clearItemFilters()">Clear</button>
+          </div>
+        </form>
+        <p id="searchStatus" class="status muted" role="status" aria-live="polite"></p>
+        <div id="notes" class="card-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+  <div id="catMenu" class="cat-menu" role="menu" aria-label="Jin" hidden>
+    <div class="cat-menu-main">
+      <div class="cat-menu-head">
+        <span class="cat-menu-name">Jin</span>
+        <span class="cat-menu-mood mono" id="catMood">Content</span>
+      </div>
+      <div class="happy-meter">
+        <div class="happy-meter-row"><span>Happiness</span><span id="catHappyValue" class="mono">60%</span></div>
+        <div id="catHappyMeter" class="happy-track" role="meter" aria-label="Happiness" aria-valuemin="0" aria-valuemax="100" aria-valuenow="60">
+          <span class="happy-fill"></span>
+        </div>
+      </div>
+      <button type="button" role="menuitem" class="cat-menu-item" data-cat-action="pet">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11.5V4a1.5 1.5 0 0 1 3 0v7.5M14 11.5V5.5a1.5 1.5 0 0 1 3 0v8M8 13l-1.6-1.8a1.6 1.6 0 0 0-2.4 2.1l3.3 4.2A6 6 0 0 0 12 20h1a5 5 0 0 0 5-5v-1.5"/></svg>
+        <span data-label="Pet {name}">Pet Jin</span>
+      </button>
+      <button type="button" role="menuitem" class="cat-menu-item" data-cat-action="feed">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12c3.5-5 9.5-6 14-2l4-3v10l-4-3c-4.5 4-10.5 3-14-2z"/><circle cx="8" cy="11" r="0.9"/></svg>
+        <span data-label="Feed {name}">Feed Jin</span>
+      </button>
+      <button type="button" role="menuitem" class="cat-menu-item" data-cat-action="play">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle class="icon-outline" cx="12" cy="12" r="8"/><path d="M6 8.5c3 2 9 2 12 0M5.5 14c3.5 2.5 9.5 2.5 13 0M10 4.5c-2 4.5-1.5 10.5 1.5 15"/></svg>
+        <span data-label="Play with {name}">Play with Jin</span>
+      </button>
+      <button type="button" role="menuitem" class="cat-menu-item" data-cat-action="rename">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>
+        <span data-label="Rename {name}">Rename Jin</span>
+      </button>
     </div>
-
-    <h2>Topics / spaces</h2>
-    <form id="topicForm" class="topic-form" onsubmit="createTopic(event)">
-      <label>
-        New topic
-        <input id="topicName" maxlength="80" placeholder="e.g. Home projects" required />
-      </label>
-      <button type="submit">Add topic</button>
-    </form>
-    <p id="topicStatus" class="status muted" role="status" aria-live="polite"></p>
-    <div id="topics"></div>
-
-    <h2>AI-organized inbox</h2>
-    <p id="analysisStatus" class="status muted" role="status" aria-live="polite"></p>
-    <div id="aiOutput" class="panel">
-      <span class="muted">Save a few notes, then click “Analyze Entire Inbox with AI”. Saved analysis reloads on refresh and is marked stale if the inbox changes.</span>
-    </div>
-
-    <h2>Attention</h2>
-    <p class="sub">Today, upcoming, overdue, and unscheduled open tasks. Dates keep the original phrase and require confirmation when ambiguous.</p>
-    <p id="briefingStatus" class="status muted" role="status" aria-live="polite"></p>
-    <div id="briefing" class="panel">
-      <span class="muted">Open tasks with timing appear here after analysis.</span>
-    </div>
-    <div id="attention" class="dashboard"></div>
-    <p id="calendarStatus" class="status muted" role="status" aria-live="polite"></p>
-    <div id="calendarPreview" class="panel">
-      <span class="muted">Calendar previews require confirmation and never write to Google without owner approval.</span>
-    </div>
-
-    <h2>Tasks</h2>
-    <div class="task-toolbar">
-      <label for="taskStatusFilter">Show</label>
-      <select id="taskStatusFilter" onchange="changeTaskStatusFilter()">
-        <option value="open">Open</option>
-        <option value="completed">Completed</option>
-        <option value="dismissed">Dismissed</option>
-      </select>
-    </div>
-    <p id="taskStatus" class="status muted" role="status" aria-live="polite"></p>
-    <div id="tasks"></div>
-
-    <h2>Raw saved notes</h2>
-    <form id="itemSearchForm" class="search-toolbar" onsubmit="applyItemFilters(event)">
-      <label>
-        Search
-        <input id="itemSearch" type="search" maxlength="200" placeholder="Text or title" />
-      </label>
-      <label>
-        Type
-        <select id="itemTypeFilter">
-          <option value="">All</option>
-          <option value="text">Text</option>
-          <option value="url">URL</option>
-          <option value="pdf">PDF</option>
-          <option value="image">Image</option>
-          <option value="voice">Voice</option>
-        </select>
-      </label>
-      <label>
-        Category
-        <select id="categoryFilter">
-          <option value="">All</option>
-        </select>
-      </label>
-      <label>
-        Priority
-        <select id="priorityFilter">
-          <option value="">All</option>
-          <option value="High">High</option>
-          <option value="Medium">Medium</option>
-          <option value="Low">Low</option>
-        </select>
-      </label>
-      <label>
-        Processing
-        <select id="processingStatusFilter">
-          <option value="">All</option>
-          <option value="ready">Ready</option>
-          <option value="processing">Processing</option>
-          <option value="failed">Failed</option>
-        </select>
-      </label>
-      <div class="search-actions">
-        <button type="submit">Search</button>
-        <button type="button" class="secondary" onclick="clearItemFilters()">Clear</button>
+    <form class="cat-rename" hidden>
+      <label for="catNameInput">Name your cat</label>
+      <div class="cat-rename-row">
+        <input id="catNameInput" type="text" maxlength="20" autocomplete="off" spellcheck="false" />
+        <button type="submit">Save</button>
       </div>
     </form>
-    <p id="searchStatus" class="status muted" role="status" aria-live="polite"></p>
-    <div id="notes"></div>
   </div>
 
   <script src="/static/pagination_state.js"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/ui.js"></script>
+  <script src="/static/playful.js"></script>
 </body>
 </html>
