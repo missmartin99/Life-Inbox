@@ -7,6 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Optional
 
+from app.retrieval import embeddings
 from app.retrieval.documents import TextPassage, _tokenize, load_passages
 
 
@@ -15,7 +16,8 @@ class RankedPassage:
     score: float
     passage: TextPassage
     keyword_score: float
-    semantic_score: float
+    semantic_score: float  # TF-IDF word overlap (the original "semantic" score)
+    meaning_score: float = 0.0  # embedding similarity, 0 when embeddings are off
 
 
 def _idf(doc_freq: int, corpus_size: int) -> float:
@@ -104,11 +106,22 @@ def search_passages(
     for token in query_tokens:
         query_vec[token] += 1.0
 
+    # Embedding similarity per passage, or None when embeddings are off.
+    meanings = embeddings.meaning_scores(
+        q, [f"{p.title} {p.passage}" for p in passages]
+    )
+
     ranked: list[RankedPassage] = []
-    for passage, vec in zip(passages, vectors):
+    for index, (passage, vec) in enumerate(zip(passages, vectors)):
         kw = _keyword_score(query_tokens, passage)
         sem = _cosine(query_vec, vec)
-        score = 0.55 * kw + 0.45 * sem
+        if meanings is None:
+            meaning = 0.0
+            score = 0.55 * kw + 0.45 * sem  # keyword-only search (as before)
+        else:
+            # Hybrid: meaning matters most, exact words still help.
+            meaning = meanings[index]
+            score = 0.6 * meaning + 0.3 * kw + 0.1 * sem
         if score < min_score:
             continue
         ranked.append(
@@ -117,6 +130,7 @@ def search_passages(
                 passage=passage,
                 keyword_score=kw,
                 semantic_score=sem,
+                meaning_score=meaning,
             )
         )
     ranked.sort(key=lambda row: row.score, reverse=True)

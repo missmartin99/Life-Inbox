@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Optional
 
 from app.organizer import extract_json_object
+from app.privacy import ai_is_configured, ask_ai
 from app.retrieval.search import RankedPassage, search_passages
 from app.retrieval.task_questions import answer_task_question
 
@@ -22,8 +22,6 @@ _MAX_EVIDENCE_PASSAGES = 5
 _MAX_PASSAGE_CHARS = 400
 _MAX_EVIDENCE_TOTAL_CHARS = 6000
 _MAX_ANSWER_CHARS = 2000
-
-ASK_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
 
 def _citation_id(item_id: int, index: int) -> str:
@@ -213,15 +211,7 @@ Evidence (JSON):
 {json.dumps(evidence, ensure_ascii=False)}
 """
 
-    from openai import OpenAI
-
-    client = OpenAI()
-    response = client.responses.create(
-        model=ASK_MODEL,
-        input=prompt,
-        max_output_tokens=int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "8000")),
-    )
-    raw = getattr(response, "output_text", None)
+    raw = ask_ai(prompt, feature="ask")
     if not isinstance(raw, str) or not raw.strip():
         return None
     parsed = extract_json_object(raw)
@@ -264,10 +254,16 @@ def build_grounded_answer(
 
     citations = _build_citations(ranked)
 
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if api_key:
+    if ai_is_configured():
         try:
-            synthesized = _synthesize_from_evidence(question, citations)
+            # Privacy: never send passages from sensitive items to the AI.
+            from app.database import get_sensitive_item_ids
+
+            sensitive_ids = get_sensitive_item_ids()
+            safe_citations = [
+                c for c in citations if c["item_id"] not in sensitive_ids
+            ]
+            synthesized = _synthesize_from_evidence(question, safe_citations)
             if synthesized is not None:
                 if synthesized["confidence"] == "insufficient":
                     return {

@@ -57,13 +57,16 @@ def _mock_ask_openai(monkeypatch, output_text=None, *, raise_on_create=None):
     def create(**_kwargs):
         if raise_on_create is not None:
             raise raise_on_create
-        return SimpleNamespace(output_text=output_text)
+        message = SimpleNamespace(content=output_text)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
     monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
     monkeypatch.setattr(
         openai,
         "OpenAI",
-        lambda: SimpleNamespace(responses=SimpleNamespace(create=create)),
+        lambda: SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        ),
     )
 
 

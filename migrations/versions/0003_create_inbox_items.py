@@ -76,7 +76,7 @@ def _copy_legacy_notes(bind) -> None:
             WHERE inbox_items.item_type != 'text'
                OR inbox_items.raw_text != notes.text
                OR inbox_items.created_at != notes.created_at
-               OR inbox_items.updated_at IS NOT notes.updated_at
+               OR inbox_items.updated_at IS DISTINCT FROM notes.updated_at
             LIMIT 1
             """
         )

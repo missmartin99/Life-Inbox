@@ -1,0 +1,32 @@
+# Server add-on: HTTPS + a password gate in front of Life Inbox.
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.oracle.yml up -d --build
+services:
+  web:
+    env_file:  # AI settings (OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL)
+      - path: .env
+        required: false
+    restart: unless-stopped
+    ports: !reset []  # not published: only Caddy talks to it
+
+  db:
+    restart: unless-stopped
+    ports: !reset []  # the database is never reachable from outside
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env, e.g. 140-238-1-2.sslip.io}
+      SITE_USER: ${SITE_USER:-team}
+      SITE_PASSWORD_HASH: ${SITE_PASSWORD_HASH:?Set SITE_PASSWORD_HASH in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data  # keeps the HTTPS certificate between restarts
+    depends_on:
+      - web
+
+volumes:
+  caddy_data:
