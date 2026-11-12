@@ -550,7 +550,96 @@ function renderNote(note) {
     );
   }
 
-  root.append(text, time, actions);
+  // Applied AI feature toolbar on each note
+  const featureBar = document.createElement('div');
+  featureBar.className = 'note-feature-bar';
+
+  if (note.is_sensitive) {
+    const sensBadge = document.createElement('span');
+    sensBadge.className = 'feature-badge sensitive';
+    sensBadge.textContent = '🔒 Sensitive';
+    sensBadge.title = 'Content is never sent to external AI';
+    featureBar.appendChild(sensBadge);
+  }
+
+  if (note.kind) {
+    const kindBadge = document.createElement('span');
+    kindBadge.className = `feature-badge ${note.kind}`;
+    kindBadge.textContent = `🏷️ ${note.kind.toUpperCase()}`;
+    featureBar.appendChild(kindBadge);
+  }
+
+  const makeCardBtn = document.createElement('button');
+  makeCardBtn.type = 'button';
+  makeCardBtn.className = 'note-tool-btn';
+  makeCardBtn.textContent = '✨ Smart Card';
+  makeCardBtn.title = 'Convert to structured recipe, book, contact, or receipt card';
+  makeCardBtn.onclick = async () => {
+    makeCardBtn.textContent = 'Formatting…';
+    try {
+      const res = await fetchJson(`/api/items/${note.id}/card`, {method: 'POST'});
+      note.kind = res.kind;
+      note.kind_fields = res.kind_fields;
+      root.replaceWith(renderNote(note));
+      if (window.toast) window.toast(`Converted to ${res.kind} card!`);
+    } catch {
+      makeCardBtn.textContent = '✨ Smart Card';
+    }
+  };
+
+  const extractEntBtn = document.createElement('button');
+  extractEntBtn.type = 'button';
+  extractEntBtn.className = 'note-tool-btn';
+  extractEntBtn.textContent = '👤 Entities';
+  extractEntBtn.title = 'Extract people, places, and organizations mentioned';
+  extractEntBtn.onclick = async () => {
+    extractEntBtn.textContent = 'Scanning…';
+    try {
+      const res = await fetchJson(`/api/items/${note.id}/entities`, {method: 'POST'});
+      extractEntBtn.textContent = `👤 ${res.length} Entities`;
+      if (window.toast) window.toast(`Extracted ${res.length} entities! Check 05 Entities tab.`);
+    } catch {
+      extractEntBtn.textContent = '👤 Entities';
+    }
+  };
+
+  const flashcardBtn = document.createElement('button');
+  flashcardBtn.type = 'button';
+  flashcardBtn.className = 'note-tool-btn';
+  flashcardBtn.textContent = '🗂️ Flashcard';
+  flashcardBtn.title = 'Generate study flashcards from this note';
+  flashcardBtn.onclick = async () => {
+    flashcardBtn.textContent = 'Making…';
+    try {
+      const res = await fetchJson(`/api/items/${note.id}/flashcards`, {method: 'POST'});
+      flashcardBtn.textContent = `🗂️ ${res.length} Cards`;
+      if (window.toast) window.toast(`Created ${res.length} flashcards! Check 07 Flashcards tab.`);
+    } catch {
+      flashcardBtn.textContent = '🗂️ Flashcard';
+    }
+  };
+
+  const sensBtn = document.createElement('button');
+  sensBtn.type = 'button';
+  sensBtn.className = `note-tool-btn ${note.is_sensitive ? 'active' : ''}`;
+  sensBtn.textContent = note.is_sensitive ? '🔒 Private (Redacted)' : '🔓 Mark Sensitive';
+  sensBtn.title = 'Toggle sensitive flag to bypass external AI';
+  sensBtn.onclick = async () => {
+    try {
+      const updated = await fetchJson(`/api/items/${note.id}/sensitive`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({sensitive: !note.is_sensitive})
+      });
+      note.is_sensitive = updated.is_sensitive;
+      root.replaceWith(renderNote(note));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  featureBar.append(makeCardBtn, extractEntBtn, flashcardBtn, sensBtn);
+  root.append(text, time, featureBar, actions);
   return root;
 }
 
@@ -1159,4 +1248,588 @@ loadDashboard();
 window.addEventListener('popstate', () => {
   syncControlsFromUrl();
   loadNotes();
+});
+
+/* =========================================================================
+   Applied AI UI Extensions: Entities Graph, Smart Cards, Flashcards, API
+   ========================================================================= */
+
+// --- 05 · Entities & Knowledge Graph -------------------------------------
+let allEntitiesCache = [];
+let entityGraphNodes = [];
+let entityGraphAnimFrame = null;
+
+async function loadEntities(typeFilter = '') {
+  const statusEl = document.getElementById('entitiesStatus');
+  const listEl = document.getElementById('entitiesList');
+  if (!listEl) return;
+  try {
+    const url = typeFilter ? `/api/entities?type=${encodeURIComponent(typeFilter)}` : '/api/entities';
+    const entities = await fetchJson(url, {}, 'Failed to load entities');
+    allEntitiesCache = entities;
+    if (entities.length === 0) {
+      statusEl.textContent = 'No entities discovered yet. Click "Extract Entities from All Notes" to analyze your inbox!';
+      listEl.innerHTML = '';
+      drawEntityGraph([]);
+      return;
+    }
+    statusEl.textContent = `Found ${entities.length} entities across your notes:`;
+    listEl.innerHTML = entities.map(ent => `
+      <div class="entity-card" onclick="showDossier(${ent.id})">
+        <div class="entity-card-head">
+          <span class="feature-badge ${ent.type}">${ent.type === 'person' ? '👤 Person' : ent.type === 'place' ? '📍 Place' : '🏢 Org'}</span>
+          <span class="mono" style="font-size:12px; color:var(--muted)">${ent.mention_count || 1} mentions</span>
+        </div>
+        <div class="entity-card-title">${esc(ent.name)}</div>
+        <div class="muted" style="font-size:12px; margin-top:6px;">Click to view full dossier & related notes &rarr;</div>
+      </div>
+    `).join('');
+
+    drawEntityGraph(entities);
+  } catch (err) {
+    statusEl.textContent = 'Failed to load entities.';
+  }
+}
+
+function filterEntitiesByType(type) {
+  document.querySelectorAll('#panel-entities .feature-bar .chip').forEach(btn => {
+    btn.classList.toggle('active', btn.textContent.toLowerCase().includes(type) || (!type && btn.textContent === 'All'));
+  });
+  loadEntities(type);
+}
+
+async function showDossier(entityId) {
+  const dossierEl = document.getElementById('entityDossier');
+  const titleEl = document.getElementById('dossierTitle');
+  const typeEl = document.getElementById('dossierType');
+  const itemsEl = document.getElementById('dossierItems');
+  if (!dossierEl) return;
+
+  try {
+    const data = await fetchJson(`/api/entities/${entityId}`, {}, 'Failed to fetch dossier');
+    dossierEl.hidden = false;
+    titleEl.textContent = `Dossier: ${data.name}`;
+    typeEl.innerHTML = `<span class="feature-badge ${data.type}">${data.type.toUpperCase()}</span>`;
+    
+    if (!data.items || data.items.length === 0) {
+      itemsEl.innerHTML = '<div class="muted">No items explicitly linked yet.</div>';
+    } else {
+      itemsEl.innerHTML = data.items.map(item => `
+        <div style="padding:12px; background:var(--void); border:1px solid var(--line); border-radius:var(--radius-inner);">
+          <div style="font-weight:500; font-size:14px; color:var(--text);">${esc(item.title || item.raw_text?.slice(0, 80) || 'Inbox Item')}</div>
+          <div class="muted" style="font-size:12px; margin-top:4px;">${esc(item.raw_text?.slice(0, 160) || '')}</div>
+          <div class="mono" style="font-size:11px; color:var(--indigo-text); margin-top:6px;">Item #${item.id} · ${item.item_type} · ${item.created_at}</div>
+        </div>
+      `).join('');
+    }
+    dossierEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function closeDossier() {
+  const dossierEl = document.getElementById('entityDossier');
+  if (dossierEl) dossierEl.hidden = true;
+}
+
+async function scanAllNotesForEntities() {
+  const statusEl = document.getElementById('entitiesStatus');
+  statusEl.textContent = 'Extracting entities across notes…';
+  try {
+    const items = await fetchJson('/api/items?limit=50', {}, 'Failed to list items');
+    let total = 0;
+    for (const it of items) {
+      try {
+        const ents = await fetchJson(`/api/items/${it.id}/entities`, { method: 'POST' });
+        total += ents.length;
+      } catch (e) {}
+    }
+    statusEl.textContent = `Scan complete! Discovered ${total} entity connections.`;
+    await loadEntities();
+  } catch (e) {
+    statusEl.textContent = 'Entity extraction encountered an issue.';
+  }
+}
+
+function drawEntityGraph(entities) {
+  const canvas = document.getElementById('entityGraphCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+
+  const width = rect.width;
+  const height = rect.height;
+  const cx = width / 2;
+  const cy = height / 2;
+
+  // Center node: "Life Inbox"
+  const nodes = [{
+    id: 0,
+    name: "Life Inbox",
+    type: "center",
+    x: cx,
+    y: cy,
+    radius: 28,
+    color: "#6366F1"
+  }];
+
+  const displayList = entities.slice(0, 18);
+  const angleStep = (2 * Math.PI) / (displayList.length || 1);
+  const radius = Math.min(width, height) * 0.38;
+
+  displayList.forEach((ent, i) => {
+    const angle = i * angleStep;
+    const color = ent.type === 'person' ? '#22D3EE' : ent.type === 'place' ? '#FBBF24' : '#8B5CF6';
+    nodes.push({
+      id: ent.id,
+      name: ent.name,
+      type: ent.type,
+      x: cx + radius * Math.cos(angle) + (Math.random() - 0.5) * 20,
+      y: cy + radius * Math.sin(angle) + (Math.random() - 0.5) * 20,
+      radius: Math.min(22, 14 + (ent.mention_count || 1) * 2),
+      color: color
+    });
+  });
+
+  ctx.clearRect(0, 0, width, height);
+
+  // Draw connecting edges
+  for (let i = 1; i < nodes.length; i++) {
+    const target = nodes[i];
+    ctx.beginPath();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+    ctx.lineWidth = 1.2;
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(target.x, target.y);
+    ctx.stroke();
+
+    // Secondary ring links
+    if (i > 1) {
+      const prev = nodes[i - 1];
+      ctx.beginPath();
+      ctx.strokeStyle = "rgba(99, 102, 241, 0.08)";
+      ctx.lineWidth = 1;
+      ctx.moveTo(prev.x, prev.y);
+      ctx.lineTo(target.x, target.y);
+      ctx.stroke();
+    }
+  }
+
+  // Draw nodes
+  nodes.forEach(node => {
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, node.radius, 0, 2 * Math.PI);
+    ctx.fillStyle = node.color;
+    ctx.shadowColor = node.color;
+    ctx.shadowBlur = 12;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    ctx.strokeStyle = "#FFFFFF";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.fillStyle = "#FFFFFF";
+    ctx.font = node.type === 'center' ? "600 12px Inter, sans-serif" : "500 11px Inter, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(node.name.length > 12 ? node.name.slice(0, 11) + '…' : node.name, node.x, node.y + node.radius + 14);
+  });
+}
+
+// --- 06 · Smart Cards & Expense Tracker ----------------------------------
+async function loadCards(kindFilter = '') {
+  const statusEl = document.getElementById('cardsStatus');
+  const listEl = document.getElementById('cardsList');
+  const totalAmountEl = document.getElementById('expenseTotalAmount');
+  const categoryBreakdownEl = document.getElementById('expenseCategoryBreakdown');
+  if (!listEl) return;
+
+  try {
+    // 1. Fetch expenses
+    const exp = await fetchJson('/api/expenses', {}, 'Failed to load expenses');
+    if (totalAmountEl) {
+      totalAmountEl.textContent = `₹${(exp.total || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+    }
+    if (categoryBreakdownEl) {
+      const cats = Object.entries(exp.by_category || {});
+      categoryBreakdownEl.innerHTML = cats.length ? cats.map(([cat, amt]) => `
+        <span class="feature-badge" style="background:rgba(52, 211, 153, 0.15); color:var(--green)">
+          ${esc(cat)}: ₹${amt.toLocaleString('en-IN')}
+        </span>
+      `).join('') : '<span class="muted" style="font-size:12px;">No receipt breakdowns yet.</span>';
+    }
+
+    // 2. Fetch cards
+    const url = kindFilter ? `/api/cards?kind=${encodeURIComponent(kindFilter)}` : '/api/cards';
+    const cards = await fetchJson(url, {}, 'Failed to load cards');
+    if (cards.length === 0) {
+      statusEl.textContent = 'No smart cards created yet. Click "Auto-Format Notes into Cards" below!';
+      listEl.innerHTML = '';
+      return;
+    }
+    statusEl.textContent = `Displaying ${cards.length} structured cards:`;
+    listEl.innerHTML = cards.map(c => {
+      const k = c.kind || 'card';
+      const f = c.kind_fields || {};
+      let bodyHtml = '';
+      if (k === 'recipe') {
+        const ings = Array.isArray(f.ingredients) ? f.ingredients.slice(0, 4).join(', ') : (f.ingredients || '');
+        bodyHtml = `
+          <div class="typed-card-fields">
+            <div class="typed-card-field"><dt>Prep time:</dt><dd>${esc(f.prep_time || 'N/A')}</dd></div>
+            <div class="typed-card-field"><dt>Ingredients:</dt><dd>${esc(ings)}</dd></div>
+          </div>
+        `;
+      } else if (k === 'book') {
+        bodyHtml = `
+          <div class="typed-card-fields">
+            <div class="typed-card-field"><dt>Author:</dt><dd>${esc(f.author || 'Unknown')}</dd></div>
+            <div class="typed-card-field"><dt>Genre:</dt><dd>${esc(f.genre || 'General')}</dd></div>
+            <div class="typed-card-field"><dt>Status:</dt><dd>${esc(f.status || 'To Read')}</dd></div>
+          </div>
+        `;
+      } else if (k === 'receipt') {
+        bodyHtml = `
+          <div class="typed-card-fields">
+            <div class="typed-card-field"><dt>Amount:</dt><dd><strong style="color:var(--green); font-size:1.15rem;">₹${esc(String(f.amount || '0'))}</strong></dd></div>
+            <div class="typed-card-field"><dt>Category:</dt><dd>${esc(f.category || 'General')}</dd></div>
+            <div class="typed-card-field"><dt>Date:</dt><dd>${esc(f.date || 'Recent')}</dd></div>
+          </div>
+        `;
+      } else if (k === 'contact') {
+        bodyHtml = `
+          <div class="typed-card-fields">
+            <div class="typed-card-field"><dt>Role/Org:</dt><dd>${esc(f.role || f.company || 'Contact')}</dd></div>
+            <div class="typed-card-field"><dt>Contact:</dt><dd>${esc(f.phone || f.email || 'N/A')}</dd></div>
+          </div>
+        `;
+      } else {
+        bodyHtml = `<div class="muted" style="font-size:13px;">${esc(c.raw_text?.slice(0, 160) || '')}</div>`;
+      }
+
+      return `
+        <div class="typed-card">
+          <span class="typed-card-badge ${k}">${k}</span>
+          <div class="typed-card-title">${esc(f.title || f.name || f.vendor || c.title || 'Untitled Card')}</div>
+          ${bodyHtml}
+          <div class="mono" style="font-size:11px; color:var(--muted); margin-top:auto;">Note #${c.id} · ${c.created_at}</div>
+        </div>
+      `;
+    }).join('');
+  } catch (err) {
+    statusEl.textContent = 'Failed to load cards.';
+  }
+}
+
+function filterCardsByKind(kind) {
+  document.querySelectorAll('#panel-cards .feature-bar .chip').forEach(btn => {
+    btn.classList.toggle('active', btn.textContent.toLowerCase().includes(kind) || (!kind && btn.textContent === 'All'));
+  });
+  loadCards(kind);
+}
+
+async function convertAllNotesToCards() {
+  const statusEl = document.getElementById('cardsStatus');
+  statusEl.textContent = 'Formatting notes into smart cards…';
+  try {
+    const items = await fetchJson('/api/items?limit=50', {}, 'Failed to list items');
+    let count = 0;
+    for (const it of items) {
+      if (!it.kind) {
+        try {
+          await fetchJson(`/api/items/${it.id}/card`, { method: 'POST' });
+          count++;
+        } catch(e) {}
+      }
+    }
+    statusEl.textContent = `Successfully structured ${count} cards!`;
+    await loadCards();
+  } catch (e) {
+    statusEl.textContent = 'Error formatting notes into cards.';
+  }
+}
+
+// --- 07 · Flashcards & Spaced Repetition Station -------------------------
+let dueFlashcardsList = [];
+let currentCardIndex = 0;
+let isCurrentCardFlipped = false;
+
+async function loadFlashcardsStation() {
+  const metaEl = document.getElementById('flashcardMeta');
+  const contentEl = document.getElementById('flashcardContent');
+  const actionsEl = document.getElementById('flashcardActions');
+  const cardEl = document.getElementById('activeFlashcard');
+  const flipBtn = document.getElementById('flipCardBtn');
+  const forgotBtn = document.getElementById('cardForgotBtn');
+  const rememberedBtn = document.getElementById('cardRememberedBtn');
+  const resurfaceEl = document.getElementById('resurfaceList');
+
+  try {
+    // 1. Load resurfacing items
+    const res = await fetchJson('/api/resurface', {}, 'Failed to load resurfaced items');
+    if (resurfaceEl) {
+      const items = [...(res.on_this_day || []), ...(res.random_discovery || [])];
+      resurfaceEl.innerHTML = items.length ? items.map(it => `
+        <div style="padding:14px; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-card); display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div style="font-weight:500; color:var(--text);">${esc(it.title || it.raw_text?.slice(0, 100) || 'Note')}</div>
+            <div class="muted" style="font-size:12px; margin-top:2px;">${esc(it.raw_text?.slice(0, 160) || '')}</div>
+          </div>
+          <span class="mono" style="font-size:11px; color:var(--amber); white-space:nowrap; margin-left:14px;">${it.resurface_reason || 'Rediscovery'}</span>
+        </div>
+      `).join('') : '<div class="muted">No historical resurfacing notes yet.</div>';
+    }
+
+    // 2. Load due flashcards
+    const due = await fetchJson('/api/flashcards/due', {}, 'Failed to load due flashcards');
+    dueFlashcardsList = due;
+    currentCardIndex = 0;
+    isCurrentCardFlipped = false;
+
+    // Update Box counters
+    for (let b = 0; b <= 4; b++) {
+      const countEl = document.getElementById(`box${b}Count`);
+      if (countEl) {
+        countEl.textContent = due.filter(c => c.box === b).length;
+      }
+    }
+
+    if (due.length === 0) {
+      metaEl.textContent = 'All caught up!';
+      contentEl.textContent = 'No flashcards due right now. Click "Generate Flashcards" below to generate study cards from your notes.';
+      actionsEl.hidden = true;
+      cardEl.classList.remove('flipped');
+      return;
+    }
+
+    renderActiveFlashcard();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderActiveFlashcard() {
+  const metaEl = document.getElementById('flashcardMeta');
+  const contentEl = document.getElementById('flashcardContent');
+  const actionsEl = document.getElementById('flashcardActions');
+  const cardEl = document.getElementById('activeFlashcard');
+  const flipBtn = document.getElementById('flipCardBtn');
+  const forgotBtn = document.getElementById('cardForgotBtn');
+  const rememberedBtn = document.getElementById('cardRememberedBtn');
+
+  if (currentCardIndex >= dueFlashcardsList.length) {
+    metaEl.textContent = 'Session Complete! 🎉';
+    contentEl.textContent = 'You have reviewed all due flashcards for today.';
+    actionsEl.hidden = true;
+    cardEl.classList.remove('flipped');
+    return;
+  }
+
+  const card = dueFlashcardsList[currentCardIndex];
+  isCurrentCardFlipped = false;
+  cardEl.classList.remove('flipped');
+  metaEl.textContent = `Card ${currentCardIndex + 1} of ${dueFlashcardsList.length} · Box ${card.box || 0}`;
+  contentEl.textContent = card.front;
+  actionsEl.hidden = false;
+  flipBtn.hidden = false;
+  forgotBtn.hidden = true;
+  rememberedBtn.hidden = true;
+}
+
+function flipActiveCard() {
+  const card = dueFlashcardsList[currentCardIndex];
+  if (!card) return;
+  const contentEl = document.getElementById('flashcardContent');
+  const cardEl = document.getElementById('activeFlashcard');
+  const flipBtn = document.getElementById('flipCardBtn');
+  const forgotBtn = document.getElementById('cardForgotBtn');
+  const rememberedBtn = document.getElementById('cardRememberedBtn');
+
+  isCurrentCardFlipped = !isCurrentCardFlipped;
+  cardEl.classList.toggle('flipped', isCurrentCardFlipped);
+  if (isCurrentCardFlipped) {
+    contentEl.textContent = card.back;
+    flipBtn.hidden = true;
+    forgotBtn.hidden = false;
+    rememberedBtn.hidden = false;
+  } else {
+    contentEl.textContent = card.front;
+    flipBtn.hidden = false;
+    forgotBtn.hidden = true;
+    rememberedBtn.hidden = true;
+  }
+}
+
+async function reviewActiveCard(remembered) {
+  const card = dueFlashcardsList[currentCardIndex];
+  if (!card) return;
+  try {
+    await fetchJson(`/api/flashcards/${card.id}/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remembered: remembered })
+    });
+    if (window.toast) {
+      window.toast(remembered ? 'Card promoted to next Leitner box! 🚀' : 'Card reset to Box 0 for review tomorrow.');
+    }
+    currentCardIndex++;
+    renderActiveFlashcard();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function generateFlashcardsForAllNotes() {
+  const contentEl = document.getElementById('flashcardContent');
+  contentEl.textContent = 'Generating study flashcards across notes…';
+  try {
+    const items = await fetchJson('/api/items?limit=25', {}, 'Failed to fetch items');
+    let created = 0;
+    for (const it of items) {
+      try {
+        const cards = await fetchJson(`/api/items/${it.id}/flashcards`, { method: 'POST' });
+        created += cards.length;
+      } catch (e) {}
+    }
+    await loadFlashcardsStation();
+    if (window.toast) window.toast(`Generated ${created} flashcards!`);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+// --- 08 · Developer & MCP Panel -----------------------------------------
+async function loadDeveloperPanel() {
+  const tokensListEl = document.getElementById('tokensList');
+  const webhooksListEl = document.getElementById('webhooksList');
+  const aiLogEl = document.getElementById('aiCallLogList');
+
+  // Load tokens
+  if (tokensListEl) {
+    try {
+      const tokens = await fetchJson('/api/tokens', {}, 'Failed to load tokens');
+      tokensListEl.innerHTML = tokens.length ? tokens.map(t => `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--void); border:1px solid var(--line); border-radius:var(--radius-inner);">
+          <div>
+            <strong>${esc(t.name)}</strong>
+            <div class="mono muted" style="font-size:11px;">${t.token_prefix || 'li_...'} · Created ${t.created_at}</div>
+          </div>
+          <button type="button" class="danger icon-btn" onclick="deleteApiToken(${t.id})" title="Revoke token">&times;</button>
+        </div>
+      `).join('') : '<div class="muted" style="font-size:13px;">No active tokens.</div>';
+    } catch(e) {}
+  }
+
+  // Load webhooks
+  if (webhooksListEl) {
+    try {
+      const hooks = await fetchJson('/api/webhooks', {}, 'Failed to load webhooks');
+      webhooksListEl.innerHTML = hooks.length ? hooks.map(h => `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--void); border:1px solid var(--line); border-radius:var(--radius-inner);">
+          <div class="mono" style="font-size:12px; color:var(--text); overflow:hidden; text-overflow:ellipsis;">${esc(h.url)}</div>
+          <button type="button" class="danger icon-btn" onclick="deleteWebhook(${h.id})" title="Delete">&times;</button>
+        </div>
+      `).join('') : '<div class="muted" style="font-size:13px;">No active webhooks.</div>';
+    } catch(e) {}
+  }
+
+  // Load Privacy AI call log
+  if (aiLogEl) {
+    try {
+      const logs = await fetchJson('/api/privacy/ai-log', {}, 'Failed to load AI log');
+      aiLogEl.innerHTML = logs.length ? logs.map(l => `
+        <div style="padding:8px 12px; background:var(--void); border:1px solid var(--line); border-radius:var(--radius-inner); font-size:12px;">
+          <div style="display:flex; justify-content:space-between;">
+            <strong style="color:var(--indigo-text);">${esc(l.feature)}</strong>
+            <span class="mono muted">${l.created_at}</span>
+          </div>
+          <div class="muted" style="font-size:11px; margin-top:2px;">
+            Chars sent: ${l.chars_sent} · <span style="color:var(--amber);">Masked values: ${l.masked_count}</span> · Model: ${l.model}
+          </div>
+        </div>
+      `).join('') : '<div class="muted" style="font-size:13px;">No AI calls logged yet.</div>';
+    } catch(e) {}
+  }
+}
+
+async function createApiToken(e) {
+  e.preventDefault();
+  const input = document.getElementById('tokenNameInput');
+  const display = document.getElementById('newTokenDisplay');
+  try {
+    const res = await fetchJson('/api/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: input.value.trim() })
+    });
+    input.value = '';
+    display.hidden = false;
+    display.innerHTML = `
+      <div style="color:var(--green); margin-bottom:4px;">Token created! Copy it now (will not be shown again):</div>
+      <code style="user-select:all; font-weight:bold; color:#fff;">${res.token}</code>
+    `;
+    await loadDeveloperPanel();
+  } catch(e) {}
+}
+
+async function deleteApiToken(id) {
+  try {
+    await fetchJson(`/api/tokens/${id}`, { method: 'DELETE' });
+    await loadDeveloperPanel();
+  } catch(e) {}
+}
+
+async function createWebhook(e) {
+  e.preventDefault();
+  const input = document.getElementById('webhookUrlInput');
+  try {
+    await fetchJson('/api/webhooks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: input.value.trim(), event: 'item.created' })
+    });
+    input.value = '';
+    await loadDeveloperPanel();
+  } catch(e) {}
+}
+
+async function deleteWebhook(id) {
+  try {
+    await fetchJson(`/api/webhooks/${id}`, { method: 'DELETE' });
+    await loadDeveloperPanel();
+  } catch(e) {}
+}
+
+function copyMcpConfig() {
+  const snippet = document.getElementById('mcpConfigSnippet').textContent;
+  navigator.clipboard.writeText(snippet);
+  if (window.toast) window.toast('MCP configuration copied to clipboard!');
+}
+
+// --- Floating Onboarding Tour --------------------------------------------
+function openOnboardingTour() {
+  const modal = document.getElementById('tourModal');
+  if (modal) modal.hidden = false;
+}
+
+function closeOnboardingTour() {
+  const modal = document.getElementById('tourModal');
+  if (modal) modal.hidden = true;
+}
+
+// --- Wire Tab Switching to Extension Loaders -----------------------------
+document.addEventListener('click', (e) => {
+  const tabBtn = e.target.closest('[role="tab"][data-tab]');
+  if (!tabBtn) return;
+  const tabName = tabBtn.dataset.tab;
+  if (tabName === 'entities') loadEntities();
+  if (tabName === 'cards') loadCards();
+  if (tabName === 'flashcards') loadFlashcardsStation();
+  if (tabName === 'developer') loadDeveloperPanel();
 });

@@ -42,6 +42,10 @@
         <button type="button" role="tab" class="tab" id="tab-ask" data-tab="ask" aria-controls="panel-ask" aria-selected="false" tabindex="-1"><span class="tab-no">02</span>Ask<i class="tab-dot" aria-hidden="true"></i></button>
         <button type="button" role="tab" class="tab" id="tab-dashboard" data-tab="dashboard" aria-controls="panel-dashboard" aria-selected="false" tabindex="-1"><span class="tab-no">03</span>Dashboard<i class="tab-dot" aria-hidden="true"></i></button>
         <button type="button" role="tab" class="tab" id="tab-notes" data-tab="notes" aria-controls="panel-notes" aria-selected="false" tabindex="-1"><span class="tab-no">04</span>Notes<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-entities" data-tab="entities" aria-controls="panel-entities" aria-selected="false" tabindex="-1"><span class="tab-no">05</span>Entities & Graph<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-cards" data-tab="cards" aria-controls="panel-cards" aria-selected="false" tabindex="-1"><span class="tab-no">06</span>Smart Cards<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-flashcards" data-tab="flashcards" aria-controls="panel-flashcards" aria-selected="false" tabindex="-1"><span class="tab-no">07</span>Flashcards<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-developer" data-tab="developer" aria-controls="panel-developer" aria-selected="false" tabindex="-1"><span class="tab-no">08</span>API & MCP<i class="tab-dot" aria-hidden="true"></i></button>
         <span class="tab-indicator" aria-hidden="true"></span>
       </div>
 
@@ -357,7 +361,258 @@
         <div id="notes" class="card-list"></div>
       </div>
     </section>
+
+    <!-- 05 · Entities & Knowledge Graph -->
+    <section id="panel-entities" class="tab-panel" role="tabpanel" aria-labelledby="tab-entities" data-panel="entities" hidden>
+      <div class="wrap band">
+        <div class="eyebrow" data-rev><span class="mono">05 · Knowledge Graph</span></div>
+        <div class="head">
+          <h2 data-split="words">People & Entities</h2>
+          <p class="sub lede" data-rev>Interactive entity connections extracted across your notes, links, and documents.</p>
+        </div>
+        <div class="feature-bar">
+          <button type="button" class="chip active" onclick="filterEntitiesByType('')">All</button>
+          <button type="button" class="chip" onclick="filterEntitiesByType('person')">👤 People</button>
+          <button type="button" class="chip" onclick="filterEntitiesByType('place')">📍 Places</button>
+          <button type="button" class="chip" onclick="filterEntitiesByType('organization')">🏢 Organizations</button>
+          <button type="button" class="secondary" style="margin-left:auto" onclick="scanAllNotesForEntities()">⚡ Extract Entities from All Notes</button>
+        </div>
+        <p id="entitiesStatus" class="status muted" role="status" aria-live="polite"></p>
+
+        <!-- Visual Entity Graph -->
+        <div class="entity-graph-container">
+          <canvas id="entityGraphCanvas" class="entity-canvas"></canvas>
+          <div class="graph-overlay-hint">Interactive Knowledge Map · Drag nodes or click to view details</div>
+        </div>
+
+        <!-- Entity Dossier Modal / View -->
+        <div id="entityDossier" class="dossier-panel" hidden>
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h3 id="dossierTitle" style="font-size:1.3rem; font-weight:600; color:var(--text);"></h3>
+            <button type="button" class="secondary icon-btn" onclick="closeDossier()" title="Close">&times;</button>
+          </div>
+          <div id="dossierType" style="margin:4px 0 12px;"></div>
+          <div class="mono" style="font-size:12px; color:var(--muted)">Connected Notes & Mention History:</div>
+          <div id="dossierItems" class="dossier-items-list"></div>
+        </div>
+
+        <!-- Entity Cards Grid -->
+        <div id="entitiesList" class="entity-grid" style="margin-top:24px;"></div>
+      </div>
+    </section>
+
+    <!-- 06 · Smart Cards & Expense Tracker -->
+    <section id="panel-cards" class="tab-panel" role="tabpanel" aria-labelledby="tab-cards" data-panel="cards" hidden>
+      <div class="wrap band">
+        <div class="eyebrow" data-rev><span class="mono">06 · Smart Templates</span></div>
+        <div class="head">
+          <h2 data-split="words">Structured Cards & Expenses</h2>
+          <p class="sub lede" data-rev>Typed cards for recipes, books, contacts, and an automated expense tracker for receipts.</p>
+        </div>
+
+        <!-- Expense Tracker Hero Summary -->
+        <div class="expense-hero-card">
+          <div class="expense-metric">
+            <span class="mono eyebrow-sm" style="color:var(--text-3)">Total Tracked Expenses</span>
+            <div id="expenseTotalAmount" class="expense-amount">₹0.00</div>
+            <div id="expenseMonthLabel" class="muted" style="font-size:13px; margin-top:2px;">All-time receipts</div>
+          </div>
+          <div id="expenseCategoryBreakdown" style="flex:2 1 300px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;"></div>
+        </div>
+
+        <div class="feature-bar">
+          <button type="button" class="chip active" onclick="filterCardsByKind('')">All</button>
+          <button type="button" class="chip" onclick="filterCardsByKind('receipt')">🧾 Receipts & Bills</button>
+          <button type="button" class="chip" onclick="filterCardsByKind('recipe')">🍳 Recipes</button>
+          <button type="button" class="chip" onclick="filterCardsByKind('book')">📚 Books</button>
+          <button type="button" class="chip" onclick="filterCardsByKind('contact')">📇 Contacts</button>
+          <button type="button" class="chip" onclick="filterCardsByKind('event')">📅 Events</button>
+          <button type="button" class="secondary" style="margin-left:auto" onclick="convertAllNotesToCards()">✨ Auto-Format Notes into Cards</button>
+        </div>
+        <p id="cardsStatus" class="status muted" role="status" aria-live="polite"></p>
+
+        <div id="cardsList" class="smart-cards-grid"></div>
+      </div>
+    </section>
+
+    <!-- 07 · Flashcards & Resurfacing -->
+    <section id="panel-flashcards" class="tab-panel" role="tabpanel" aria-labelledby="tab-flashcards" data-panel="flashcards" hidden>
+      <div class="wrap band">
+        <div class="eyebrow" data-rev><span class="mono">07 · Memory & Retention</span></div>
+        <div class="head">
+          <h2 data-split="words">Spaced Repetition & Resurfacing</h2>
+          <p class="sub lede" data-rev>Active learning Leitner flashcards and "On this day" memory resurfacing.</p>
+        </div>
+
+        <!-- Leitner Box Progress Counter -->
+        <div class="leitner-box-row">
+          <div class="leitner-box-col"><div class="mono eyebrow-sm">Box 0 (1d)</div><div id="box0Count" class="leitner-box-count">0</div></div>
+          <div class="leitner-box-col"><div class="mono eyebrow-sm">Box 1 (3d)</div><div id="box1Count" class="leitner-box-count">0</div></div>
+          <div class="leitner-box-col"><div class="mono eyebrow-sm">Box 2 (7d)</div><div id="box2Count" class="leitner-box-count">0</div></div>
+          <div class="leitner-box-col"><div class="mono eyebrow-sm">Box 3 (14d)</div><div id="box3Count" class="leitner-box-count">0</div></div>
+          <div class="leitner-box-col"><div class="mono eyebrow-sm">Box 4 (30d)</div><div id="box4Count" class="leitner-box-count">0</div></div>
+        </div>
+
+        <!-- Active Flashcard Review Station -->
+        <div class="flashcard-stage">
+          <div id="activeFlashcard" class="flashcard">
+            <div id="flashcardMeta" class="mono" style="font-size:11px; color:var(--muted)">Cards Due for Review</div>
+            <div id="flashcardContent" class="flashcard-prompt">No cards due today. Click "Generate Flashcards" below to make study cards from your notes!</div>
+            <div id="flashcardActions" class="flashcard-actions" hidden>
+              <button type="button" id="flipCardBtn" class="secondary" onclick="flipActiveCard()">Flip Card</button>
+              <button type="button" id="cardForgotBtn" class="danger" onclick="reviewActiveCard(false)" hidden>❌ Forgot (Box 0)</button>
+              <button type="button" id="cardRememberedBtn" class="magnetic" onclick="reviewActiveCard(true)" hidden>✅ Remembered (+1 Box)</button>
+            </div>
+          </div>
+          <div style="text-align:center; margin-top:14px;">
+            <button type="button" class="secondary" onclick="generateFlashcardsForAllNotes()">🗂️ Generate Flashcards from Notes</button>
+          </div>
+        </div>
+
+        <!-- Resurfacing Shelf -->
+        <div style="margin-top:40px;">
+          <h3 style="font-size:1.15rem; color:var(--text); margin-bottom:12px;">🕒 On This Day & Rediscovery</h3>
+          <div id="resurfaceList" class="resurface-shelf"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 08 · API & MCP Connector -->
+    <section id="panel-developer" class="tab-panel" role="tabpanel" aria-labelledby="tab-developer" data-panel="developer" hidden>
+      <div class="wrap band">
+        <div class="eyebrow" data-rev><span class="mono">08 · Developer & Integrations</span></div>
+        <div class="head">
+          <h2 data-split="words">Public API, Webhooks & MCP Server</h2>
+          <p class="sub lede" data-rev>Connect external AI agents (Claude Desktop, Cursor, Gemini) and automate inbox workflows.</p>
+        </div>
+
+        <div class="dev-grid">
+          <!-- API Tokens Card -->
+          <div class="dev-card">
+            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">🔑 API Bearer Tokens</h3>
+            <p class="muted" style="font-size:13.5px; margin-bottom:16px;">Generate scoped Bearer tokens (<code>li_...</code>) for scripts and external apps.</p>
+            <form onsubmit="createApiToken(event)" style="display:flex; gap:8px; margin-bottom:14px;">
+              <input id="tokenNameInput" placeholder="Token name (e.g. My Script)" required style="flex:1" />
+              <button type="submit">Generate</button>
+            </form>
+            <div id="newTokenDisplay" class="code-block" hidden></div>
+            <div id="tokensList" style="display:flex; flex-direction:column; gap:8px; margin-top:12px;"></div>
+          </div>
+
+          <!-- MCP Server Connector Card -->
+          <div class="dev-card">
+            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">🤖 Model Context Protocol (MCP)</h3>
+            <p class="muted" style="font-size:13.5px;">Add this configuration to Claude Desktop (<code>claude_desktop_config.json</code>) or Cursor to let AI agents query your inbox directly.</p>
+            <div class="code-block" style="position:relative;">
+              <button type="button" class="secondary copy-pill" onclick="copyMcpConfig()">Copy</button>
+              <pre id="mcpConfigSnippet" style="margin:0; font-family:var(--mono);">{
+  "mcpServers": {
+    "life-inbox": {
+      "command": "python",
+      "args": ["-m", "mcp_server.server"],
+      "env": {
+        "DATABASE_URL": "sqlite:////Users/ishaanwadhwa/Projects/Life-Inbox/data/life_inbox.db",
+        "LIFE_INBOX_API_TOKEN": "li_YOUR_TOKEN_HERE"
+      }
+    }
+  }
+}</pre>
+            </div>
+            <div class="muted" style="font-size:12px;">Supports: <code>search_inbox</code>, <code>add_inbox_item</code>, <code>list_inbox_items</code>.</div>
+          </div>
+
+          <!-- Webhooks Card -->
+          <div class="dev-card">
+            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">⚡ Outbound Webhooks</h3>
+            <p class="muted" style="font-size:13.5px; margin-bottom:14px;">Receive real-time HTTP POST notifications when new notes or media are captured.</p>
+            <form onsubmit="createWebhook(event)" style="display:flex; gap:8px; margin-bottom:14px;">
+              <input id="webhookUrlInput" type="url" placeholder="https://example.com/webhook" required style="flex:1" />
+              <button type="submit">Add Webhook</button>
+            </form>
+            <div id="webhooksList" style="display:flex; flex-direction:column; gap:8px;"></div>
+          </div>
+
+          <!-- Privacy & AI Call Audit Log -->
+          <div class="dev-card">
+            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">🔒 Privacy & AI Call Audit Log</h3>
+            <p class="muted" style="font-size:13.5px; margin-bottom:12px;">All outgoing prompts have PII (phones, cards, emails, Aadhaar/PAN) masked. Verify recent calls below:</p>
+            <div id="aiCallLogList" style="display:flex; flex-direction:column; gap:8px; max-height:260px; overflow-y:auto;"></div>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
+
+  <!-- Floating Onboarding Tour & Feature Discovery -->
+  <button type="button" id="tourFab" class="tour-floater-btn" onclick="openOnboardingTour()">
+    <span>✨</span> Explore Features & Tour
+  </button>
+
+  <div id="tourModal" class="tour-modal-backdrop" hidden>
+    <div class="tour-modal">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <h3 style="font-size:1.35rem; color:var(--text);">✨ Life Inbox Feature Guide</h3>
+          <p class="muted" style="font-size:13.5px; margin-top:2px;">Discover what your intelligent second-brain copilot can do:</p>
+        </div>
+        <button type="button" class="secondary icon-btn" onclick="closeOnboardingTour()" title="Close">&times;</button>
+      </div>
+
+      <div class="tour-card-list">
+        <div class="tour-item">
+          <div class="tour-item-info">
+            <strong>🍳 Smart Cards & Receipts</strong>
+            <span>Turns unstructured notes into typed recipe, book, contact cards, and tracks monthly expenses from bills.</span>
+          </div>
+          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-cards').click()">View Cards</button>
+        </div>
+
+        <div class="tour-item">
+          <div class="tour-item-info">
+            <strong>👤 People & Entities Knowledge Graph</strong>
+            <span>Extracts people, places, and organizations with an interactive graph and dossier page for everyone you know.</span>
+          </div>
+          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-entities').click()">View Graph</button>
+        </div>
+
+        <div class="tour-item">
+          <div class="tour-item-info">
+            <strong>🧠 Meaning-Based Semantic Search</strong>
+            <span>Search with completely different words (e.g. "teeth checkup" finds dentist notes) via local embeddings.</span>
+          </div>
+          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-ask').click()">Try Ask</button>
+        </div>
+
+        <div class="tour-item">
+          <div class="tour-item-info">
+            <strong>🗂️ Leitner Flashcards & Resurfacing</strong>
+            <span>Active learning with 5-box spaced repetition and "On this day" historical recall.</span>
+          </div>
+          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-flashcards').click()">Study Cards</button>
+        </div>
+
+        <div class="tour-item">
+          <div class="tour-item-info">
+            <strong>🔒 Privacy Shield & Redaction</strong>
+            <span>Automatically redacts phone numbers, card numbers, and PII before sending prompts to external AI.</span>
+          </div>
+          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-developer').click()">Audit Log</button>
+        </div>
+
+        <div class="tour-item">
+          <div class="tour-item-info">
+            <strong>🤖 MCP Server & Public API</strong>
+            <span>Connect Claude Desktop, Cursor, or custom automations directly into your personal inbox.</span>
+          </div>
+          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-developer').click()">Get MCP Config</button>
+        </div>
+      </div>
+
+      <div style="text-align:right;">
+        <button type="button" class="magnetic" onclick="closeOnboardingTour()">Got it, let's explore!</button>
+      </div>
+    </div>
+  </div>
 
   <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
 
