@@ -51,12 +51,33 @@ def _cosine(a: Counter[str], b: Counter[str]) -> float:
     return dot / (norm_a * norm_b)
 
 
+# Filler words that appear in almost every note, so matching them says nothing
+# about relevance ("money I owe for the flat" must not match a passport note
+# just because both contain "for" and "i").
+STOPWORDS = {
+    "a", "an", "and", "are", "at", "be", "by", "can", "do", "for", "from",
+    "i", "in", "is", "it", "me", "my", "of", "on", "or", "should", "so",
+    "that", "the", "this", "to", "was", "we", "what", "when", "where",
+    "which", "who", "will", "with", "you", "your",
+}
+
+
+def _word_matches(token: str, words: set[str]) -> bool:
+    """Whole-word match; words of 4+ letters also match longer forms
+    ("pay" must equal "pay", but "renew" also matches "renewal")."""
+    if token in words:
+        return True
+    return len(token) >= 4 and any(word.startswith(token) for word in words)
+
+
 def _keyword_score(query_tokens: list[str], passage: TextPassage) -> float:
-    if not query_tokens:
+    """Share of the meaningful query words that appear in the passage."""
+    tokens = [t for t in query_tokens if t not in STOPWORDS]
+    if not tokens:
         return 0.0
-    hay = f"{passage.title} {passage.passage}".lower()
-    hits = sum(1 for token in query_tokens if token in hay)
-    return hits / len(query_tokens)
+    words = set(_tokenize(f"{passage.title} {passage.passage}"))
+    hits = sum(1 for token in tokens if _word_matches(token, words))
+    return hits / len(tokens)
 
 
 def search_passages(
