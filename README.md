@@ -218,6 +218,22 @@ difference on sample data with `python -m scripts.eval_search`:
 | Keyword only | 0/12 | 5/5 |
 | Keyword + embeddings | 12/12 | 5/5 |
 
+### Resurfacing and flashcards
+
+**Resurfacing** (`app/resurface.py`): `GET /api/resurface` returns notes saved
+exactly 1 week, 1 month, 3 months or 1 year ago today ("on this day"), plus up
+to 3 notes older than two weeks picked at random (the same pick all day).
+
+**Flashcards** (`app/flashcards.py`) use the Leitner box system: a card you
+remember moves up a box and comes back later (1, 3, 7, 14, then 30 days); a card
+you forget goes back to box 0 and comes back tomorrow.
+
+- `POST /api/items/{id}/flashcards` makes up to 3 cards from an item (AI when
+  configured, otherwise "fill in the blank" cards that hide the longest word);
+- `GET /api/flashcards/due` lists cards to review today;
+- `POST /api/flashcards/{id}/review` with `{"remembered": true}` (or `false`)
+  schedules the next review.
+
 ## 4. Optional: configure OpenAI
 
 If you want AI analysis instead of the local fallback, set your API key in the

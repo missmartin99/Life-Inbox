@@ -170,6 +170,25 @@ class EmbeddingCacheRecord(Base):
     created_at = Column(Text, nullable=False)
 
 
+class FlashcardRecord(Base):
+    """A question/answer card made from an item, scheduled with Leitner boxes."""
+
+    __tablename__ = "flashcards"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    item_id = Column(
+        Integer, ForeignKey("inbox_items.id", ondelete="CASCADE"), nullable=False
+    )
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    box = Column(Integer, nullable=False, default=0, server_default="0")
+    due_date = Column(Text, nullable=False)  # YYYY-MM-DD
+    created_at = Column(Text, nullable=False)
+    last_reviewed_at = Column(Text, nullable=True)
+
+
 class AiCallLogRecord(Base):
     """One row per AI call: what feature, which model, how much was sent.
 
@@ -2142,3 +2161,81 @@ def save_cached_vectors(vectors: dict, model: str) -> None:
                 )
             )
         session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Flashcards
+# ---------------------------------------------------------------------------
+
+
+def _flashcard_to_dict(card: FlashcardRecord) -> dict:
+    return {
+        "id": card.id,
+        "item_id": card.item_id,
+        "question": card.question,
+        "answer": card.answer,
+        "box": card.box,
+        "due_date": card.due_date,
+        "last_reviewed_at": card.last_reviewed_at,
+    }
+
+
+def add_flashcards(item_id: int, cards: list, due_date: str) -> Optional[list]:
+    owner_id = require_owner_id()
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None or item.owner_user_id != owner_id:
+            return None
+        records = [
+            FlashcardRecord(
+                owner_user_id=owner_id,
+                item_id=item_id,
+                question=card["question"],
+                answer=card["answer"],
+                box=0,
+                due_date=due_date,
+                created_at=now,
+            )
+            for card in cards
+        ]
+        session.add_all(records)
+        session.commit()
+        return [_flashcard_to_dict(r) for r in records]
+
+
+def list_due_flashcards(today: str) -> list:
+    """Cards due today or earlier, most overdue first."""
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        cards = session.scalars(
+            select(FlashcardRecord)
+            .where(
+                FlashcardRecord.owner_user_id == owner_id,
+                FlashcardRecord.due_date <= today,  # YYYY-MM-DD sorts like a date
+            )
+            .order_by(FlashcardRecord.due_date, FlashcardRecord.id)
+        )
+        return [_flashcard_to_dict(c) for c in cards]
+
+
+def save_flashcard_review(card_id: int, box: int, due_date: str) -> Optional[dict]:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        card = session.get(FlashcardRecord, card_id)
+        if card is None or card.owner_user_id != owner_id:
+            return None
+        card.box = box
+        card.due_date = due_date
+        card.last_reviewed_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _flashcard_to_dict(card)
+
+
+def get_flashcard(card_id: int) -> Optional[dict]:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        card = session.get(FlashcardRecord, card_id)
+        if card is None or card.owner_user_id != owner_id:
+            return None
+        return _flashcard_to_dict(card)

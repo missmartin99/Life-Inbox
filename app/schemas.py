@@ -78,6 +78,10 @@ class SensitiveUpdate(BaseModel):
     sensitive: bool
 
 
+class FlashcardReview(BaseModel):
+    remembered: bool
+
+
 class RedactPreviewRequest(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
 

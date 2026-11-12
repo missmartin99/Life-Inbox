@@ -23,7 +23,14 @@ from app.privacy import redact
 from app.item_kinds import KIND_FIELDS, make_card
 from app.expenses import expense_summary
 from app.entities import ENTITY_TYPES, extract_entities
+from app.attention import dates as attention_dates
+from app.flashcards import make_cards, next_review
+from app.resurface import resurface
 from app.database import (
+    add_flashcards,
+    get_flashcard,
+    list_due_flashcards,
+    save_flashcard_review,
     get_entity_page,
     list_entities,
     save_item_entities,
@@ -84,6 +91,7 @@ from app.organizer import analyze_inbox_with_openai, validate_analysis_result
 from app.retrieval.ask import build_grounded_answer
 from app.retrieval.search import search_passages
 from app.schemas import (
+    FlashcardReview,
     RedactPreviewRequest,
     SensitiveUpdate,
     AskRequest,
@@ -1130,6 +1138,48 @@ def get_entity(entity_id: int):
     if page is None:
         raise HTTPException(status_code=404, detail="Entity not found")
     return page
+
+
+# --- Resurfacing and flashcards ---------------------------------------------
+
+
+@app.get("/api/resurface")
+def get_resurfaced_items():
+    """Old notes worth another look: "on this day" and a few forgotten ones."""
+    today = attention_dates.today_in_configured_tz()
+    return resurface(list_items_from_db(limit=None, offset=0), today)
+
+
+@app.post("/api/items/{item_id}/flashcards")
+def create_flashcards(item_id: int):
+    """Turn an item into up to 3 flashcards, due for review today."""
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    text = item["extracted_text"] or item["raw_text"] or ""
+    cards = make_cards(text, is_sensitive=item["is_sensitive"])
+    if not cards:
+        raise HTTPException(status_code=400, detail="Could not make cards from this item")
+    today = attention_dates.today_in_configured_tz().isoformat()
+    return add_flashcards(item_id, cards, due_date=today)
+
+
+@app.get("/api/flashcards/due")
+def get_due_flashcards():
+    """Cards to review today (including overdue ones)."""
+    today = attention_dates.today_in_configured_tz().isoformat()
+    return list_due_flashcards(today)
+
+
+@app.post("/api/flashcards/{card_id}/review")
+def review_flashcard(card_id: int, body: FlashcardReview):
+    """Record whether you remembered the answer; schedules the next review."""
+    card = get_flashcard(card_id)
+    if card is None:
+        raise HTTPException(status_code=404, detail="Flashcard not found")
+    today = attention_dates.today_in_configured_tz()
+    box, due = next_review(card["box"], body.remembered, today)
+    return save_flashcard_review(card_id, box, due.isoformat())
 
 
 # --- Privacy --------------------------------------------------------------
