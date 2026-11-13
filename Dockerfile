@@ -7,6 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     LIFE_INBOX_ENV=beta \
     LIFE_INBOX_UPLOAD_DIR=/data/uploads
 
+# ffmpeg prepares voice recordings for speech-to-text (Jin, the voice assistant).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
