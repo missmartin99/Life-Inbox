@@ -79,7 +79,7 @@ def load_config(*, strict: Optional[bool] = None) -> AppConfig:
     auth_mode = os.getenv("LIFE_INBOX_AUTH_MODE", "dev").strip() or "dev"
     if auth_mode == "google_stub":  # legacy value
         auth_mode = "dev"
-    timezone = os.getenv("LIFE_INBOX_TIMEZONE", "UTC").strip() or "UTC"
+    timezone = os.getenv("LIFE_INBOX_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
     max_upload_mb = int(os.getenv("LIFE_INBOX_MAX_UPLOAD_MB", "5") or "5")
     allow_dev_login = _truthy(
         "LIFE_INBOX_ALLOW_DEV_LOGIN", "1" if auth_mode == "dev" else "0"

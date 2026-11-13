@@ -77,28 +77,59 @@ def _tags_for_text(text: str) -> list[str]:
 
 
 def _extract_timing(text: str) -> str | None:
-    lowered = text.lower()
-    for phrase in (
-        "today",
-        "tomorrow",
-        "this weekend",
-        "this week",
-        "next week",
-        "before friday",
-        "before thursday",
-    ):
-        if phrase in lowered:
-            return phrase
-    return None
+    """The words that say when ("tomorrow", "in a week", "by Friday at 5pm")."""
+    from app.attention.dates import find_timing_phrase
+
+    return find_timing_phrase(text)
+
+
+def _upcoming_due(when: str | None):
+    """The due date for a timing phrase, if it is today or later."""
+    from app.attention.dates import parse_timing_phrase, today_in_configured_tz
+
+    if not when:
+        return None
+    due = parse_timing_phrase(when).due_date
+    if due is None or due < today_in_configured_tz():
+        return None
+    return due
+
+
+_PRIORITY_RANK = {"Low": 0, "Medium": 1, "High": 2}
+
+
+def _priority_with_date(text: str, when: str | None) -> str:
+    """Keyword priority, raised when the due date is close.
+
+    Due today or tomorrow is High; due within a week is at least Medium.
+    """
+    from app.attention.dates import today_in_configured_tz
+
+    priority = priority_for_text(text)
+    due = _upcoming_due(when)
+    if due is None:
+        return priority
+    days = (due - today_in_configured_tz()).days
+    by_date = "High" if days <= 1 else "Medium" if days <= 7 else "Low"
+    return max(priority, by_date, key=_PRIORITY_RANK.__getitem__)
+
+
+ACTION_MARKERS = (
+    "call", "buy", "send", "ask", "finish", "submit", "pay", "book",
+    "pick up", "prepare", "renew", "follow up", "need to", "remember to",
+    "research", "look into", "order",
+    # deadlines people write as nouns ("submission tomorrow", "exam on Friday")
+    "submission", "deadline", "assignment", "exam", "appointment",
+)
 
 
 def _split_action_tasks(text: str, note_id: int, priority: str) -> list[dict]:
-    """One source may yield multiple durable tasks when sentences look actionable."""
-    action_markers = [
-        "call", "buy", "send", "ask", "finish", "submit", "pay", "book",
-        "pick up", "prepare", "renew", "follow up", "need to", "remember to",
-        "research", "look into", "order",
-    ]
+    """One source may yield multiple durable tasks when sentences look actionable.
+
+    A sentence is a task when it has an action word ("call", "pay",
+    "submission") or names an upcoming date ("in a week", "on 20 Nov"):
+    something with a date is something to do.
+    """
     chunks = [
         part.strip()
         for part in re.split(r"[.!?\n]+", text)
@@ -106,22 +137,26 @@ def _split_action_tasks(text: str, note_id: int, priority: str) -> list[dict]:
     ]
     todos = []
     for chunk in chunks:
-        if any(marker in chunk.lower() for marker in action_markers):
+        when = _extract_timing(chunk) or _extract_timing(text)
+        has_action = any(marker in chunk.lower() for marker in ACTION_MARKERS)
+        has_own_date = _upcoming_due(_extract_timing(chunk)) is not None
+        if has_action or has_own_date:
             todos.append(
                 {
                     "task": chunk,
-                    "priority": priority_for_text(chunk),
+                    "priority": _priority_with_date(chunk, when),
                     "source_note_ids": [note_id],
-                    "when": _extract_timing(chunk) or _extract_timing(text),
+                    "when": when,
                 }
             )
-    if not todos and any(marker in text.lower() for marker in action_markers):
+    if not todos and any(marker in text.lower() for marker in ACTION_MARKERS):
+        when = _extract_timing(text)
         todos.append(
             {
                 "task": text,
-                "priority": priority,
+                "priority": _priority_with_date(text, when),
                 "source_note_ids": [note_id],
-                "when": _extract_timing(text),
+                "when": when,
             }
         )
     return todos
@@ -136,7 +171,7 @@ def fallback_analyze(notes: list[dict]) -> dict:
     for note in notes:
         text = note["text"]
         bucket = bucket_for_text(text)
-        priority = priority_for_text(text)
+        priority = _priority_with_date(text, _extract_timing(text))
         title = text[:72] + ("..." if len(text) > 72 else "")
         tags = _tags_for_text(text)
 

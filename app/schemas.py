@@ -53,6 +53,17 @@ class InboxItemUpdate(InboxItemText):
     pass
 
 
+class NoteDeadline(BaseModel):
+    """When a note's soonest open task is due, in the app's time zone (IST)."""
+
+    date: str  # YYYY-MM-DD
+    time: str  # HH:MM, 24-hour; 23:59 when the note gave no time
+    all_day: bool  # no time given: due by the end of that day
+    label: str  # "Fri, 13 Nov 2026, 11:59 PM IST"
+    status: str  # overdue | today | upcoming | snoozed
+    task: str  # the task this deadline belongs to
+
+
 class InboxItem(BaseModel):
     id: int
     item_type: str
@@ -69,6 +80,11 @@ class InboxItem(BaseModel):
     owner_user_id: Optional[int] = None
     created_at: str
     updated_at: Optional[str]
+    saved_label: Optional[str] = None  # created_at in the app's time zone
+    # Filled in for the notes list once the note has been organized:
+    priority: Optional[str] = None  # of its open tasks, else of the note
+    deadline: Optional[NoteDeadline] = None
+    task_status: Optional[str] = None  # open | done | None (no tasks)
 
 
 class UrlItemCreate(BaseModel):
@@ -324,3 +340,36 @@ class AskResponse(BaseModel):
     mode: Literal["llm_grounded", "extractive_fallback", "task_board"] = (
         "extractive_fallback"
     )
+
+
+class ProfileUpdate(BaseModel):
+    """Fields left out are not changed. An empty date_of_birth removes it."""
+
+    display_name: Optional[str] = Field(default=None, max_length=200)
+    date_of_birth: Optional[str] = Field(default=None, max_length=20)
+
+
+ThemeChoice = Literal["system", "dark", "light"]
+BellScope = Literal["all", "due_soon", "high"]
+
+
+class UserSettings(BaseModel):
+    """Someone's settings. Missing or unreadable values fall back to these."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    theme: ThemeChoice = "dark"
+    bell_badge: bool = True  # show the number of pending tasks on the bell
+    bell_overdue_alert: bool = True  # turn the bell red when tasks are overdue
+    bell_scope: BellScope = "all"  # all | due_soon (overdue + today) | high
+
+
+class UserSettingsUpdate(BaseModel):
+    """Fields left out are not changed. Unknown fields are refused."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    theme: Optional[ThemeChoice] = None
+    bell_badge: Optional[bool] = None
+    bell_overdue_alert: Optional[bool] = None
+    bell_scope: Optional[BellScope] = None

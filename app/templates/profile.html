@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0A0A0A" />
+  <script src="/static/theme.js"></script>
+  <title>Your profile · Life Inbox</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://api.fontshare.com" />
+  <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@300;400&display=swap" />
+  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@700&display=swap" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body class="profile-body">
+  <nav class="topnav" aria-label="Primary">
+    <div class="wrap nav-row">
+      <a class="brand" href="/">Life<span>Inbox</span></a>
+      <a class="back-link" href="/">← Back to inbox</a>
+    </div>
+  </nav>
+
+  <main class="wrap profile-page">
+    <header class="profile-header">
+      <p class="mono eyebrow-sm">Account</p>
+      <h1>Your profile</h1>
+      <p class="sub">Update your photo, name and personal details.</p>
+    </header>
+
+    <form id="profileForm" class="profile-form" novalidate>
+      <section class="panel profile-section" aria-labelledby="identityTitle">
+        <h3 id="identityTitle">Profile picture and name</h3>
+        <div class="profile-identity">
+          <div class="profile-photo profile-photo-lg" aria-hidden="true">
+            <img id="photo" alt="" referrerpolicy="no-referrer" hidden>
+            <span id="initials" class="profile-initials"></span>
+          </div>
+          <div class="photo-controls">
+            <p id="photoSource" class="photo-source"></p>
+            <div class="photo-actions">
+              <button type="button" id="changePhoto" class="secondary photo-btn">Upload a photo</button>
+              <button type="button" id="removePhoto" class="secondary photo-btn" hidden>Remove photo</button>
+              <input id="photoInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+            </div>
+            <p class="hint">PNG, JPEG, WebP or GIF, up to 5 MB. Cropped to a square.</p>
+          </div>
+        </div>
+        <label>
+          Name
+          <input id="nameInput" name="display_name" type="text" maxlength="80" autocomplete="name" required>
+        </label>
+      </section>
+
+      <section class="panel profile-section" aria-labelledby="contactTitle">
+        <h3 id="contactTitle">Email and date of birth</h3>
+        <label>
+          Email
+          <input id="emailInput" type="email" readonly aria-describedby="emailHint">
+        </label>
+        <p id="emailHint" class="hint"></p>
+        <label>
+          Date of birth
+          <input id="birthInput" name="date_of_birth" type="date" min="1900-01-01" autocomplete="bday" aria-describedby="birthHint">
+        </label>
+        <p id="birthHint" class="hint">Optional. Only you can see it.</p>
+      </section>
+
+      <section class="panel profile-section" aria-labelledby="googleTitle">
+        <h3 id="googleTitle">Google account</h3>
+        <div class="status-row">
+          <span id="googleText"></span>
+          <span id="googlePill" class="status-pill"></span>
+        </div>
+        <p id="googleMeta" class="hint"></p>
+      </section>
+
+      <div class="profile-save">
+        <button type="submit" id="saveButton" disabled>Save changes</button>
+        <button type="button" id="cancelButton" class="secondary" disabled>Cancel</button>
+        <p id="formStatus" class="status" role="status" aria-live="polite"></p>
+      </div>
+    </form>
+  </main>
+
+  <script src="/static/profile.js" defer></script>
+</body>
+</html>

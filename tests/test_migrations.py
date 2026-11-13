@@ -112,6 +112,26 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
         }
         assert "calendar_action_receipts" in set(inspector.get_table_names())
         assert {
+            column["name"] for column in inspector.get_columns("calendar_connections")
+        } == {
+            "id",
+            "user_id",
+            "google_email",
+            "scopes",
+            "refresh_token_enc",
+            "access_token_enc",
+            "access_token_expires_at",
+            "calendar_id",
+            "status",
+            "last_synced_at",
+            "last_error",
+            "connected_at",
+            "updated_at",
+        }
+        assert {
+            column["name"] for column in inspector.get_columns("calendar_task_events")
+        } == {"id", "user_id", "task_id", "event_id", "fingerprint", "synced_at"}
+        assert {
             column["name"] for column in inspector.get_columns("topics")
         } == {
             "id",
@@ -131,7 +151,7 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
                 text("SELECT version_num FROM alembic_version")
             )
             topic_count = connection.scalar(text("SELECT COUNT(*) FROM topics"))
-        assert revision == "0013_topics_unique_per_owner"
+        assert revision == "0017_google_calendar"
         assert topic_count >= 9
     finally:
         engine.dispose()
@@ -232,7 +252,7 @@ def test_upgrade_adopts_legacy_database_without_changing_notes(
             for note_id, note_text, created_at in existing_notes
         ]
         assert next_id == 10
-        assert revision == "0013_topics_unique_per_owner"
+        assert revision == "0017_google_calendar"
     finally:
         engine.dispose()
 
@@ -318,7 +338,7 @@ def test_upgrade_consolidates_tasks_that_share_a_source(tmp_path, monkeypatch):
             )
         ]
         assert [tuple(link) for link in links] == [(1, 1)]
-        assert revision == "0013_topics_unique_per_owner"
+        assert revision == "0017_google_calendar"
 
         # Milestone 2 drops the one-task-per-source unique index so one
         # inbox item may source multiple durable tasks.

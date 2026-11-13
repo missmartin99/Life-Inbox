@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <meta name="theme-color" content="#0A0A0A" />
+  <script src="/static/theme.js"></script>
   <title>Life Inbox</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -50,16 +51,41 @@
           <svg class="ico-sound-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z"/><path d="M15.5 9.2a4 4 0 0 1 0 5.6M18.2 6.6a7.6 7.6 0 0 1 0 10.8"/></svg>
           <svg class="ico-sound-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg>
         </button>
+        <button type="button" id="bellToggle" class="secondary icon-btn bell-toggle" aria-expanded="false" aria-controls="bellPanel" aria-label="Pending tasks" title="Pending tasks">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.6 2.1H4.4z"/><path d="M10 20.6a2.1 2.1 0 0 0 4 0"/></svg>
+          <span id="bellCount" class="bell-count" aria-hidden="true" hidden></span>
+        </button>
+        <div id="bellPanel" class="account-panel bell-panel" hidden>
+          <div class="bell-head">
+            <div class="mono eyebrow-sm">Pending tasks</div>
+            <span id="bellSummary" class="bell-summary"></span>
+          </div>
+          <div id="bellList" class="bell-list"></div>
+          <p id="bellEmpty" class="bell-empty" hidden>You're all caught up. No pending tasks.</p>
+          <p id="bellStatus" class="status" role="status" aria-live="polite"></p>
+        </div>
         <button type="button" id="accountToggle" class="secondary account-toggle" aria-expanded="false" aria-controls="accountPanel">
-          <span class="account-dot" aria-hidden="true"></span>Account
+          <span id="accountAvatarWrap" class="account-avatar-wrap" aria-hidden="true"><img id="accountAvatar" class="account-avatar" alt="" referrerpolicy="no-referrer" hidden><span class="account-dot"></span></span><span id="accountName" class="account-name">Account</span>
         </button>
         <div id="accountPanel" class="account-panel" hidden>
           <div class="auth-bar">
             <div class="mono eyebrow-sm">Session</div>
-            <span id="authUser" class="muted">Checking session…</span>
-            <div id="authActions" class="auth-actions auth-actions-stack" hidden>
+            <div class="profile-row">
+              <div class="profile-photo" aria-hidden="true">
+                <img id="profileAvatar" alt="" referrerpolicy="no-referrer" hidden>
+                <span id="profileInitials" class="profile-initials"></span>
+              </div>
+              <div class="profile-text">
+                <span id="authUser" class="muted">Checking session…</span>
+                <div id="photoActions" class="photo-actions" hidden>
+                  <button type="button" class="secondary photo-btn" onclick="window.location.assign('/profile')">Edit profile</button>
+                  <button type="button" class="secondary photo-btn" onclick="window.location.assign('/settings')">Settings</button>
+                </div>
+              </div>
+            </div>
+            <div id="authActions" class="auth-actions" hidden>
               <button type="button" class="secondary" onclick="logoutSession()">Sign out</button>
-              <button type="button" class="secondary" onclick="logoutEverywhere()">Sign out everywhere</button>
+              <button type="button" class="secondary" onclick="switchAccount()">Sign in from another account</button>
             </div>
             <form id="devLoginForm" class="auth-form" onsubmit="devLogin(event)" hidden>
               <label>
@@ -404,6 +430,7 @@
 
   <script src="/static/pagination_state.js"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/ribbon.js"></script>
   <script src="/static/ui.js"></script>
   <script src="/static/playful.js"></script>
 </body>

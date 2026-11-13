@@ -136,9 +136,19 @@ def test_create_and_list_canonical_text_item(client):
         "owner_user_id": item["owner_user_id"],
         "created_at": item["created_at"],
         "updated_at": None,
+        "saved_label": item["saved_label"],
+        "priority": None,
+        "deadline": None,
+        "task_status": None,
     }
     assert item["owner_user_id"] is not None
-    assert client.get("/api/items").json() == [item]
+    assert item["saved_label"].endswith(" IST")  # shown in India time
+    # The list adds priority/deadline once the note is organized.
+    details = {"priority", "deadline", "task_status"}
+    listed = client.get("/api/items").json()
+    assert [{k: v for k, v in i.items() if k not in details} for i in listed] == [
+        {k: v for k, v in item.items() if k not in details}
+    ]
 
 
 def test_item_search_is_case_insensitive_for_raw_text_and_title(client):

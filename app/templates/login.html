@@ -1,33 +1,53 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0A0A0A" />
+  <script src="/static/theme.js"></script>
   <title>Sign in · Life Inbox</title>
-  <style>
-    :root { --bg:#f7f8fa; --card:#fff; --text:#111; --muted:#5b6470; --accent:#2f6f84; --error:#b42318; --border:#e3e6ea; }
-    @media (prefers-color-scheme: dark) {
-      :root { --bg:#14171a; --card:#1d2125; --text:#f2f4f6; --muted:#a3acb7; --accent:#4a9bb5; --error:#ff8a80; --border:#2d3339; }
-    }
-    * { box-sizing: border-box; }
-    body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-           background:var(--bg); color:var(--text);
-           font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; padding:16px; }
-    main { width:100%; max-width:380px; background:var(--card); border:1px solid var(--border);
-           border-radius:16px; padding:32px 28px; text-align:center; }
-    h1 { margin:0 0 8px; font-size:28px; }
-    p { color:var(--muted); margin:0 0 24px; line-height:1.5; }
-    .btn { display:block; padding:12px 16px; border-radius:10px; background:var(--accent);
-           color:#fff; font-weight:600; text-decoration:none; }
-    .error { color:var(--error); font-weight:600; min-height:1.2em; margin:0 0 16px; }
-  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://api.fontshare.com" />
+  <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@300;400&display=swap" />
+  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@700&display=swap" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script>
+    // Hidden-until-animated states, with a failsafe if login.js never runs.
+    document.documentElement.classList.add('js');
+    window.setTimeout(function () {
+      if (!window.lifeInboxLoginReady) document.documentElement.classList.remove('js');
+    }, 3000);
+  </script>
 </head>
-<body>
-  <main>
-    <h1>Life Inbox</h1>
-    <p>Capture first. Organize when you are ready.</p>
-    <p class="error" role="alert">__ERROR__</p>
-    __BUTTON__
+<body class="login-body">
+  <nav class="topnav" aria-label="Primary">
+    <div class="wrap nav-row">
+      <a class="brand" href="/login">Life<span>Inbox</span></a>
+    </div>
+  </nav>
+
+  <main class="hero login-hero">
+    <canvas id="ribbon" class="ribbon" aria-hidden="true"></canvas>
+    <div class="hero-veil" aria-hidden="true"></div>
+    <div class="wrap hero-inner">
+      <h1 class="hero-title" data-split="glyph">Life Inbox</h1>
+      <p class="sub hero-tagline login-tagline" data-rev>Capture first. Organize the whole inbox with AI when you are ready.</p>
+
+      <section class="login-card" data-rev aria-labelledby="loginTitle">
+        <p class="mono eyebrow-sm">Welcome</p>
+        <h2 id="loginTitle" class="login-title">Sign in to your inbox</h2>
+        <p class="login-sub">Your notes, tasks and deadlines, all in one place.</p>
+        <p class="login-error" role="alert">__ERROR__</p>
+        __BUTTON__
+        <p class="login-fine">Google only shares your name, email address and profile picture with Life Inbox.</p>
+      </section>
+    </div>
   </main>
+
+  <script src="/static/ribbon.js" defer></script>
+  <script src="/static/login.js" defer></script>
 </body>
 </html>

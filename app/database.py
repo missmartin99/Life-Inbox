@@ -126,6 +126,11 @@ class UserRecord(Base):
     created_at = Column(Text, nullable=False)
     google_sub = Column(Text, nullable=True)
     last_login_at = Column(Text, nullable=True)
+    # Profile photo: an uploaded one wins over the Google account picture.
+    google_picture_url = Column(Text, nullable=True)
+    avatar_path = Column(Text, nullable=True)  # relative upload-storage path
+    date_of_birth = Column(Text, nullable=True)  # ISO date, e.g. 1999-08-21
+    settings_json = Column(Text, nullable=True)  # see schemas.UserSettings
 
 
 class AuthSessionRecord(Base):
@@ -322,6 +327,57 @@ class TaskSourceItemRecord(Base):
     )
 
 
+class CalendarConnectionRecord(Base):
+    """One person's Google Calendar connection. Tokens are stored encrypted."""
+
+    __tablename__ = "calendar_connections"
+    __table_args__ = (
+        Index("ix_calendar_connections_user_id", "user_id", unique=True),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    google_email = Column(Text, nullable=True)
+    scopes = Column(Text, nullable=False)
+    refresh_token_enc = Column(Text, nullable=False)
+    access_token_enc = Column(Text, nullable=True)
+    access_token_expires_at = Column(Text, nullable=True)
+    calendar_id = Column(Text, nullable=True)  # the "Life Inbox" calendar
+    status = Column(Text, nullable=False)  # connected | needs_reconnect
+    last_synced_at = Column(Text, nullable=True)
+    last_error = Column(Text, nullable=True)
+    connected_at = Column(Text, nullable=False)
+    updated_at = Column(Text, nullable=False)
+
+
+class CalendarTaskEventRecord(Base):
+    """Which Google Calendar event shows which task.
+
+    task_id is deliberately not a foreign key: when a task is deleted, this row
+    must survive until the next sync has removed the event from the calendar.
+    """
+
+    __tablename__ = "calendar_task_events"
+    __table_args__ = (
+        UniqueConstraint("user_id", "task_id", name="uq_calendar_task_events_task"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    task_id = Column(Integer, nullable=False)
+    event_id = Column(Text, nullable=False)
+    fingerprint = Column(Text, nullable=False)  # what the event last looked like
+    synced_at = Column(Text, nullable=False)
+
+
 DEFAULT_TOPIC_NAMES = (
     "Work",
     "Money & Admin",
@@ -343,6 +399,40 @@ def get_current_owner_id() -> Optional[int]:
     return _current_owner_id.get()
 
 
+def _avatar_url(user: UserRecord) -> Optional[str]:
+    if user.avatar_path:
+        # The stored file name is random per upload, so it doubles as a
+        # cache-busting version: a new photo always gets a new URL.
+        version = Path(user.avatar_path).stem.rsplit("-", 1)[-1]
+        return f"/api/me/avatar?v={version}"
+    return user.google_picture_url or None
+
+
+def _settings_for(user: UserRecord) -> dict:
+    """Saved settings merged over the defaults; bad values are ignored."""
+    from pydantic import ValidationError
+
+    from app.schemas import UserSettings
+
+    saved = {}
+    if user.settings_json:
+        try:
+            saved = json.loads(user.settings_json)
+        except ValueError:
+            saved = {}
+    if not isinstance(saved, dict):
+        saved = {}
+    settings = UserSettings().model_dump()
+    for key, value in saved.items():
+        if key not in settings:
+            continue
+        try:
+            settings[key] = getattr(UserSettings(**{key: value}), key)
+        except ValidationError:
+            pass  # keep the default for a value that is no longer valid
+    return settings
+
+
 def _user_to_dict(user: UserRecord) -> dict:
     return {
         "id": user.id,
@@ -350,6 +440,12 @@ def _user_to_dict(user: UserRecord) -> dict:
         "display_name": user.display_name,
         "auth_provider": user.auth_provider,
         "created_at": user.created_at,
+        "avatar_url": _avatar_url(user),
+        "has_custom_avatar": bool(user.avatar_path),
+        "date_of_birth": user.date_of_birth,
+        "google_connected": bool(user.google_sub),
+        "last_login_at": user.last_login_at,
+        "settings": _settings_for(user),
     }
 
 
@@ -520,7 +616,9 @@ def revoke_all_auth_sessions(user_id: int) -> int:
         return len(rows)
 
 
-def upsert_google_user(*, sub: str, email: str, name: Optional[str]) -> dict:
+def upsert_google_user(
+    *, sub: str, email: str, name: Optional[str], picture: Optional[str] = None
+) -> dict:
     """Find or create the user for a verified Google identity.
 
     Accounts are matched on Google's stable `sub`. An existing account with
@@ -555,6 +653,7 @@ def upsert_google_user(*, sub: str, email: str, name: Optional[str]) -> dict:
                         created_at=now,
                         google_sub=sub,
                         last_login_at=now,
+                        google_picture_url=picture,
                     )
                     session.add(user)
                 else:
@@ -563,6 +662,7 @@ def upsert_google_user(*, sub: str, email: str, name: Optional[str]) -> dict:
                     ) is None:
                         user.email = cleaned
                     user.last_login_at = now
+                    user.google_picture_url = picture  # follow Google changes
                 session.flush()
                 ensure_default_topics(session, owner_user_id=user.id)
                 session.commit()
@@ -572,6 +672,70 @@ def upsert_google_user(*, sub: str, email: str, name: Optional[str]) -> dict:
                 if attempt == 1:
                     raise
     raise RuntimeError("unreachable")  # pragma: no cover
+
+
+_UNSET = object()
+
+
+def update_user_profile(
+    user_id: int, *, display_name=_UNSET, date_of_birth=_UNSET
+) -> dict:
+    """Change the name and/or date of birth (already validated)."""
+    with SessionLocal() as session:
+        user = session.get(UserRecord, user_id)
+        if user is None:
+            raise AuthRequiredError("Authentication required.")
+        if display_name is not _UNSET:
+            user.display_name = display_name
+        if date_of_birth is not _UNSET:
+            user.date_of_birth = date_of_birth
+        session.commit()
+        return _user_to_dict(user)
+
+
+def get_user_settings(user_id: int) -> dict:
+    with SessionLocal() as session:
+        user = session.get(UserRecord, user_id)
+        if user is None:
+            raise AuthRequiredError("Authentication required.")
+        return _settings_for(user)
+
+
+def update_user_settings(user_id: int, changes: dict) -> dict:
+    """Merge validated changes into the saved settings; return all settings."""
+    with SessionLocal() as session:
+        user = session.get(UserRecord, user_id)
+        if user is None:
+            raise AuthRequiredError("Authentication required.")
+        settings = _settings_for(user)
+        settings.update(changes)
+        user.settings_json = json.dumps(settings, sort_keys=True)
+        session.commit()
+        return settings
+
+
+def get_user_avatar_path(user_id: int) -> Optional[str]:
+    with SessionLocal() as session:
+        user = session.get(UserRecord, user_id)
+        return user.avatar_path if user else None
+
+
+def set_user_avatar_path(
+    user_id: int, avatar_path: Optional[str]
+) -> tuple[dict, Optional[str]]:
+    """Set (or clear, with None) the uploaded photo.
+
+    Returns the updated user and the previous file path, which the caller
+    deletes from storage once the database points at the new one.
+    """
+    with SessionLocal() as session:
+        user = session.get(UserRecord, user_id)
+        if user is None:
+            raise AuthRequiredError("Authentication required.")
+        previous = user.avatar_path
+        user.avatar_path = avatar_path
+        session.commit()
+        return _user_to_dict(user), previous
 
 
 _OWNED_MODELS = (
@@ -715,7 +879,115 @@ def _item_to_dict(item: InboxItemRecord) -> dict:
         "owner_user_id": item.owner_user_id,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
+        "saved_label": _saved_label(item.created_at),
     }
+
+
+def _saved_label(created_at: Optional[str]) -> Optional[str]:
+    from app.attention.dates import format_timestamp
+
+    return format_timestamp(created_at)
+
+
+def _task_due(task: "TaskRecord"):
+    """(due date, time of day or None) for a task, read the same way as the bell."""
+    from datetime import date as date_cls
+
+    from app.attention.dates import parse_timing_phrase
+
+    parsed = parse_timing_phrase(task.timing_text)
+    due = parsed.due_date
+    if task.due_on:
+        try:
+            due = date_cls.fromisoformat(task.due_on)
+        except ValueError:
+            pass
+    return due, (parsed.due_time if due is not None else None)
+
+
+def _add_task_details(session, items: list[dict], owner_id: int) -> None:
+    """Give each note its priority and the deadline of its soonest open task."""
+    from datetime import date as date_cls
+
+    from app.attention.dates import (
+        END_OF_DAY,
+        classify_attention_bucket,
+        format_deadline,
+        now_in_configured_tz,
+    )
+
+    if not items:
+        return
+    ids = [item["id"] for item in items]
+    insights = {
+        row.item_id: row
+        for row in session.scalars(
+            select(ItemInsightRecord).where(ItemInsightRecord.item_id.in_(ids))
+        )
+    }
+    tasks_by_item: dict[int, list[TaskRecord]] = {}
+    for item_id, task in session.execute(
+        select(TaskSourceItemRecord.item_id, TaskRecord)
+        .join(TaskRecord, TaskRecord.id == TaskSourceItemRecord.task_id)
+        .where(
+            TaskSourceItemRecord.item_id.in_(ids),
+            TaskRecord.owner_user_id == owner_id,
+        )
+    ).all():
+        tasks_by_item.setdefault(item_id, []).append(task)
+
+    def rank(priority: Optional[str]) -> int:
+        return PRIORITY_ORDER.index(priority) if priority in PRIORITY_ORDER else 99
+
+    now = now_in_configured_tz()
+    for item in items:
+        tasks = tasks_by_item.get(item["id"], [])
+        open_tasks = [task for task in tasks if task.status == TASK_OPEN]
+        insight = insights.get(item["id"])
+        if open_tasks:
+            priority = min((task.priority for task in open_tasks), key=rank)
+        elif insight is not None:
+            priority = insight.user_priority or insight.priority
+        else:
+            priority = None  # not organized yet
+
+        dated = []
+        for task in open_tasks:
+            due, due_time = _task_due(task)
+            if due is not None:
+                dated.append((due, due_time or END_OF_DAY, due_time, task))
+        deadline = None
+        if dated:
+            due, _, due_time, task = min(dated, key=lambda entry: entry[:2])
+            snoozed = None
+            if task.snoozed_until:
+                try:
+                    snoozed = date_cls.fromisoformat(task.snoozed_until)
+                except ValueError:
+                    snoozed = None
+            deadline = {
+                "date": due.isoformat(),
+                "time": (due_time or END_OF_DAY).strftime("%H:%M"),
+                "all_day": due_time is None,
+                "label": format_deadline(due, due_time),
+                "status": classify_attention_bucket(
+                    due,
+                    reference=now.date(),
+                    snoozed_until=snoozed,
+                    due_time=due_time,
+                    now=now,
+                ),
+                "task": task.text,
+            }
+
+        item["priority"] = priority
+        item["deadline"] = deadline
+        if open_tasks:
+            item["task_status"] = "open"
+        elif any(task.status == TASK_COMPLETED for task in tasks):
+            item["task_status"] = "done"
+        else:
+            item["task_status"] = None
 
 
 def add_item_to_db(raw_text: str) -> dict:
@@ -798,7 +1070,9 @@ def list_items_from_db(
         if limit is not None:
             statement = statement.limit(limit)
         items = session.scalars(statement).all()
-        return [_item_to_dict(item) for item in items]
+        results = [_item_to_dict(item) for item in items]
+        _add_task_details(session, results, owner_id)
+        return results
 
 
 def compute_inbox_fingerprint(session=None) -> str:
@@ -1796,6 +2070,73 @@ def get_attention_board() -> dict:
     return board
 
 
+PRIORITY_ORDER = ("High", "Medium", "Low")
+URGENCY_ORDER = ("overdue", "today", "upcoming", "unscheduled", "snoozed")
+
+
+def list_pending_tasks_by_priority(scope: str = "all") -> dict:
+    """Open tasks for the bell: High first, then Medium, then Low.
+
+    Within a priority, overdue tasks come first, then today's, upcoming
+    (soonest first), undated, and snoozed ones. ``scope`` narrows the list:
+    "due_soon" keeps overdue and due-today tasks, "high" keeps High priority.
+    """
+    board = get_attention_board()
+    tasks = [task for bucket in URGENCY_ORDER for task in board[bucket]]
+    if scope == "due_soon":
+        tasks = [t for t in tasks if t["attention_bucket"] in ("overdue", "today")]
+    elif scope == "high":
+        tasks = [t for t in tasks if t.get("priority") == "High"]
+    tasks.sort(
+        key=lambda task: (
+            PRIORITY_ORDER.index(task["priority"])
+            if task.get("priority") in PRIORITY_ORDER
+            else len(PRIORITY_ORDER),
+            URGENCY_ORDER.index(task["attention_bucket"]),
+            task.get("normalized_due_on") or "9999-12-31",
+            task.get("due_time") or "99:99",
+            task["id"],
+        )
+    )
+    return {
+        "reference_date": board["reference_date"],
+        "scope": scope,
+        "count": len(tasks),
+        "overdue_count": sum(1 for t in tasks if t["attention_bucket"] == "overdue"),
+        "tasks": [
+            {
+                "id": task["id"],
+                "text": task["text"],
+                "priority": task["priority"],
+                "urgency": task["attention_bucket"],
+                "due_on": task.get("normalized_due_on"),
+                "due_time": task.get("due_time"),
+                **_bell_deadline_labels(task),
+                "timing_text": task.get("timing_text"),
+                "snoozed_until": task.get("snoozed_until"),
+            }
+            for task in tasks
+        ],
+    }
+
+
+def _bell_deadline_labels(task: dict) -> dict:
+    """"Fri, 13 Nov 2026, 3:00 PM IST" and "3:00 PM IST" for a bell entry."""
+    from datetime import date as date_cls
+    from datetime import time as time_cls
+
+    from app.attention.dates import END_OF_DAY, format_clock, format_deadline, timezone_label
+
+    if not task.get("normalized_due_on"):
+        return {"deadline_label": None, "time_label": None}
+    due = date_cls.fromisoformat(task["normalized_due_on"])
+    due_time = time_cls.fromisoformat(task["due_time"]) if task.get("due_time") else None
+    return {
+        "deadline_label": format_deadline(due, due_time),
+        "time_label": f"{format_clock(due_time or END_OF_DAY)} {timezone_label()}",
+    }
+
+
 def get_daily_briefing() -> dict:
     board = get_attention_board()
     priority_rank = {"High": 0, "Medium": 1, "Low": 2}
@@ -1878,6 +2219,202 @@ def save_calendar_receipt(
             "payload": payload,
             "created_at": receipt.created_at,
         }
+
+
+# --- Google Calendar connection ------------------------------------------------
+
+CALENDAR_CONNECTED = "connected"
+CALENDAR_NEEDS_RECONNECT = "needs_reconnect"
+_CALENDAR_UPDATABLE = {
+    "access_token_enc",
+    "access_token_expires_at",
+    "status",
+    "last_synced_at",
+    "last_error",
+}
+
+
+def _calendar_connection_to_dict(record: CalendarConnectionRecord) -> dict:
+    return {
+        "user_id": record.user_id,
+        "google_email": record.google_email,
+        "scopes": record.scopes,
+        "refresh_token_enc": record.refresh_token_enc,
+        "access_token_enc": record.access_token_enc,
+        "access_token_expires_at": record.access_token_expires_at,
+        "calendar_id": record.calendar_id,
+        "status": record.status,
+        "last_synced_at": record.last_synced_at,
+        "last_error": record.last_error,
+        "connected_at": record.connected_at,
+    }
+
+
+def _calendar_record(session, user_id: int) -> Optional[CalendarConnectionRecord]:
+    return session.scalar(
+        select(CalendarConnectionRecord).where(
+            CalendarConnectionRecord.user_id == user_id
+        )
+    )
+
+
+def get_calendar_connection(user_id: int) -> Optional[dict]:
+    with SessionLocal() as session:
+        record = _calendar_record(session, user_id)
+        return _calendar_connection_to_dict(record) if record else None
+
+
+def calendar_sync_wanted(user_id: int) -> bool:
+    """True when this person's tasks should be kept on their calendar."""
+    with SessionLocal() as session:
+        record = _calendar_record(session, user_id)
+        return record is not None and record.status == CALENDAR_CONNECTED
+
+
+def save_calendar_connection(
+    user_id: int,
+    *,
+    google_email: Optional[str],
+    scopes: str,
+    refresh_token_enc: str,
+    access_token_enc: str,
+    access_token_expires_at: str,
+) -> dict:
+    """Store a new (or renewed) connection.
+
+    Reconnecting the same Google account keeps its Life Inbox calendar and
+    events. Connecting a different account starts afresh, because the old
+    calendar belongs to the other account.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        record = _calendar_record(session, user_id)
+        if record is None or (record.google_email or "") != (google_email or ""):
+            session.execute(
+                delete(CalendarTaskEventRecord).where(
+                    CalendarTaskEventRecord.user_id == user_id
+                )
+            )
+        if record is None:
+            record = CalendarConnectionRecord(user_id=user_id, connected_at=now)
+            session.add(record)
+        elif (record.google_email or "") != (google_email or ""):
+            record.calendar_id = None
+            record.last_synced_at = None
+            record.connected_at = now
+        record.google_email = google_email
+        record.scopes = scopes
+        record.refresh_token_enc = refresh_token_enc
+        record.access_token_enc = access_token_enc
+        record.access_token_expires_at = access_token_expires_at
+        record.status = CALENDAR_CONNECTED
+        record.last_error = None
+        record.updated_at = now
+        session.commit()
+        return _calendar_connection_to_dict(record)
+
+
+def update_calendar_connection(user_id: int, **fields) -> None:
+    unknown = set(fields) - _CALENDAR_UPDATABLE
+    if unknown:
+        raise ValueError(f"Cannot update {sorted(unknown)}")
+    with SessionLocal() as session:
+        record = _calendar_record(session, user_id)
+        if record is None:
+            return
+        for name, value in fields.items():
+            setattr(record, name, value)
+        record.updated_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+
+
+def replace_calendar_id(user_id: int, calendar_id: str) -> None:
+    """Point at a (new) Life Inbox calendar; events on the old one are forgotten."""
+    with SessionLocal() as session:
+        record = _calendar_record(session, user_id)
+        if record is None:
+            return
+        record.calendar_id = calendar_id
+        record.updated_at = datetime.now(timezone.utc).isoformat()
+        session.execute(
+            delete(CalendarTaskEventRecord).where(
+                CalendarTaskEventRecord.user_id == user_id
+            )
+        )
+        session.commit()
+
+
+def delete_calendar_connection(user_id: int) -> bool:
+    with SessionLocal() as session:
+        session.execute(
+            delete(CalendarTaskEventRecord).where(
+                CalendarTaskEventRecord.user_id == user_id
+            )
+        )
+        result = session.execute(
+            delete(CalendarConnectionRecord).where(
+                CalendarConnectionRecord.user_id == user_id
+            )
+        )
+        session.commit()
+        return bool(result.rowcount)
+
+
+def list_calendar_task_events(user_id: int) -> dict[int, dict]:
+    """{task_id: {"event_id", "fingerprint"}} for every event Life Inbox made."""
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(CalendarTaskEventRecord).where(
+                CalendarTaskEventRecord.user_id == user_id
+            )
+        ).all()
+        return {
+            row.task_id: {"event_id": row.event_id, "fingerprint": row.fingerprint}
+            for row in rows
+        }
+
+
+def count_calendar_task_events(user_id: int) -> int:
+    with SessionLocal() as session:
+        return int(
+            session.scalar(
+                select(func.count())
+                .select_from(CalendarTaskEventRecord)
+                .where(CalendarTaskEventRecord.user_id == user_id)
+            )
+            or 0
+        )
+
+
+def save_calendar_task_event(
+    user_id: int, task_id: int, event_id: str, fingerprint: str
+) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        row = session.scalar(
+            select(CalendarTaskEventRecord).where(
+                CalendarTaskEventRecord.user_id == user_id,
+                CalendarTaskEventRecord.task_id == task_id,
+            )
+        )
+        if row is None:
+            row = CalendarTaskEventRecord(user_id=user_id, task_id=task_id)
+            session.add(row)
+        row.event_id = event_id
+        row.fingerprint = fingerprint
+        row.synced_at = now
+        session.commit()
+
+
+def delete_calendar_task_event(user_id: int, task_id: int) -> None:
+    with SessionLocal() as session:
+        session.execute(
+            delete(CalendarTaskEventRecord).where(
+                CalendarTaskEventRecord.user_id == user_id,
+                CalendarTaskEventRecord.task_id == task_id,
+            )
+        )
+        session.commit()
 
 
 def _topic_to_dict(topic: TopicRecord, item_count: int = 0) -> dict:

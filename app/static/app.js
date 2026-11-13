@@ -432,6 +432,35 @@ function captureTypeLabel(itemType) {
   return 'Item';
 }
 
+// Priority and deadline under each note. Times are in India time (IST), as
+// sent by the server, so they read the same on every device.
+function renderNoteMeta(note) {
+  const meta = document.createElement('div');
+  meta.className = 'note-meta';
+  const chip = (text, className) => {
+    const span = document.createElement('span');
+    span.className = `note-chip ${className}`;
+    span.textContent = text;
+    meta.append(span);
+  };
+  if (note.priority) {
+    chip(`${note.priority} priority`, `prio prio-${note.priority.toLowerCase()}`);
+  }
+  if (note.task_status === 'done' && !note.deadline) {
+    chip('Done', 'done');
+  } else if (note.deadline) {
+    const {status, label} = note.deadline;
+    const text = status === 'overdue' ? `Overdue \u00b7 was due ${label}`
+      : status === 'today' ? `Due today \u00b7 ${label}`
+      : status === 'snoozed' ? `Snoozed \u00b7 due ${label}`
+      : `Due ${label}`;
+    chip(text, `deadline deadline-${status}`);
+  } else if (note.priority) {
+    chip('No deadline', 'deadline deadline-none');
+  }
+  return meta;
+}
+
 function renderNote(note) {
   const root = document.createElement('div');
   root.className = 'note';
@@ -487,7 +516,8 @@ function renderNote(note) {
   time.className = 'time';
   const status = note.processing_status ? ` · ${note.processing_status}` : '';
   const error = note.error_message ? ` · ${note.error_message}` : '';
-  time.textContent = `#${note.id} · ${note.item_type}${status}${error} · ${note.created_at}`;
+  const saved = note.saved_label ? `Saved ${note.saved_label}` : note.created_at;
+  time.textContent = `#${note.id} · ${note.item_type}${status}${error} · ${saved}`;
 
   const actions = document.createElement('div');
   actions.className = 'note-actions';
@@ -564,8 +594,30 @@ function renderNote(note) {
     );
   }
 
-  root.append(text, time, actions);
+  root.append(text, renderNoteMeta(note), time, actions);
   return root;
+}
+
+// After notes are organized, update the priority and deadline of the notes on
+// screen without reloading the list (keeps "Load more" pages and scroll).
+async function refreshNoteDetails() {
+  const cards = [...document.querySelectorAll('#notes .note[data-note-id]')];
+  if (!cards.length) return;
+  const params = itemFilterParams();
+  params.set('limit', String(Math.min(500, Math.max(cards.length, itemPagination.loadedItems.length || 0, 1))));
+  params.set('offset', '0');
+  let notes;
+  try {
+    notes = await fetchJson(`/api/items?${params}`, undefined, 'Unable to load notes.');
+  } catch {
+    return;  // the cards keep what they show
+  }
+  const byId = new Map(notes.map(note => [String(note.id), note]));
+  for (const card of cards) {
+    const fresh = byId.get(card.dataset.noteId);
+    const meta = card.querySelector(':scope > .note-meta');
+    if (fresh && meta) meta.replaceWith(renderNoteMeta(fresh));
+  }
 }
 
 function showEditExtractedText(note, root) {
@@ -749,6 +801,7 @@ async function refreshAfterAnalysis() {
   await Promise.allSettled([
     loadTopics(),
     loadDashboard(),
+    refreshNoteDetails(),
   ]);
 }
 
@@ -1058,8 +1111,113 @@ async function loadDashboard() {
     setStatus('dashboardStatus', 'Dashboard updated.');
   } catch {
     setStatus('dashboardStatus', 'We could not load the organized dashboard.', true);
+  } finally {
+    loadNotifications();
   }
 }
+
+/* ---------- Notification bell: pending tasks, high to low priority ---------- */
+const PRIORITY_GROUPS = [
+  ['High', 'High priority'],
+  ['Medium', 'Medium priority'],
+  ['Low', 'Low priority'],
+];
+
+function shortDate(isoDate) {
+  const [year, month, day] = isoDate.split('-').map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+    weekday: 'short', day: 'numeric', month: 'short'
+  });
+}
+
+function whenLabel(task, today) {
+  const at = task.time_label ? `, ${task.time_label}` : (task.due_time ? ` at ${task.due_time}` : '');
+  const day = iso => (iso === today ? 'today' : shortDate(iso));
+  switch (task.urgency) {
+    case 'overdue':
+      return task.due_on ? `Overdue · was due ${day(task.due_on)}${at}` : 'Overdue';
+    case 'today':
+      return `Due today${at}`;
+    case 'upcoming':
+      return task.due_on ? `Due ${shortDate(task.due_on)}${at}` : 'Upcoming';
+    case 'snoozed':
+      return task.snoozed_until ? `Snoozed until ${shortDate(task.snoozed_until)}` : 'Snoozed';
+    default:
+      return task.timing_text || 'No due date';
+  }
+}
+
+function renderNotifications(data) {
+  const list = document.getElementById('bellList');
+  list.replaceChildren();
+  for (const [priority, label] of PRIORITY_GROUPS) {
+    const tasks = data.tasks.filter(task => task.priority === priority);
+    if (!tasks.length) continue;
+    const group = document.createElement('section');
+    group.className = 'bell-group';
+    const heading = document.createElement('h4');
+    heading.className = `bell-group-title prio-${priority.toLowerCase()}`;
+    heading.textContent = `${label} · ${tasks.length}`;
+    const items = document.createElement('ol');
+    items.className = 'bell-items';
+    for (const task of tasks) {
+      const item = document.createElement('li');
+      item.className = `bell-item urgency-${task.urgency}`;
+      const text = document.createElement('p');
+      text.className = 'bell-text';
+      text.textContent = task.text;
+      const when = document.createElement('p');
+      when.className = 'bell-when';
+      when.textContent = whenLabel(task, data.reference_date);
+      item.append(text, when);
+      items.append(item);
+    }
+    group.append(heading, items);
+    list.append(group);
+  }
+
+  const count = data.count;
+  const overdue = data.overdue_count;
+  const scopeNote = {due_soon: 'Overdue and due today', high: 'High priority only'}[data.scope] || '';
+  const empty = document.getElementById('bellEmpty');
+  empty.hidden = count > 0;
+  empty.textContent = {
+    due_soon: "Nothing overdue or due today.",
+    high: "No high-priority tasks pending.",
+  }[data.scope] || "You're all caught up. No pending tasks.";
+  document.getElementById('bellSummary').textContent = [
+    count ? `${count} pending${overdue ? ` · ${overdue} overdue` : ''}` : '',
+    scopeNote,
+  ].filter(Boolean).join(' · ');
+  const badge = document.getElementById('bellCount');
+  badge.hidden = count === 0 || data.show_badge === false;
+  badge.textContent = count > 99 ? '99+' : String(count);
+  badge.classList.toggle('has-overdue', overdue > 0 && data.overdue_alert !== false);
+  const toggle = document.getElementById('bellToggle');
+  const label = count
+    ? `Pending tasks: ${count}${overdue ? `, ${overdue} overdue` : ''}`
+    : 'Pending tasks: none';
+  toggle.setAttribute('aria-label', label);
+  toggle.title = label;
+}
+
+async function loadNotifications() {
+  try {
+    renderNotifications(
+      await fetchJson('/api/notifications', undefined, 'Unable to load your pending tasks.')
+    );
+    setStatus('bellStatus', '');
+  } catch {
+    setStatus('bellStatus', 'Could not load your pending tasks.', true);
+  }
+}
+
+// Fresh list every time the bell is clicked, and every few minutes so
+// "due today" turns into "overdue" without a reload.
+document.getElementById('bellToggle').addEventListener('click', loadNotifications);
+window.setInterval(() => {
+  if (document.visibilityState === 'visible') loadNotifications();
+}, 5 * 60 * 1000);
 
 function fillAskExample(text) {
   const input = document.getElementById('askQuestion');
@@ -1128,19 +1286,78 @@ async function loadAuthOptions() {
   }
 }
 
+let authOptions = {google_enabled: false};
+
+function initialsFor(name) {
+  const words = (name || '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '';
+  const first = words[0][0];
+  const last = words.length > 1 ? words[words.length - 1][0] : '';
+  return (first + last).toUpperCase();
+}
+
+function setPhoto(img, url, onShown) {
+  // If the picture fails to load (e.g. an old Google link), fall back to the
+  // dot on the button and initials in the menu.
+  img.onerror = () => {
+    img.hidden = true;
+    onShown(false);
+  };
+  if (url) {
+    img.src = url;
+    img.hidden = false;
+  } else {
+    img.removeAttribute('src');
+    img.hidden = true;
+  }
+  onShown(Boolean(url));
+}
+
+function showProfilePhoto(user) {
+  // user is null when signed out or the anonymous Local Owner.
+  const url = user ? user.avatar_url : null;
+  const wrap = document.getElementById('accountAvatarWrap');
+  setPhoto(document.getElementById('accountAvatar'), url, shown => {
+    wrap.classList.toggle('has-photo', shown);
+  });
+  setPhoto(document.getElementById('profileAvatar'), url, () => {});
+  document.getElementById('profileInitials').textContent = user ? initialsFor(user.display_name) : '';
+  document.getElementById('photoActions').hidden = !user;
+}
+
+function showAccountName(fullName) {
+  // The Account button shows the signed-in person's first name.
+  const toggle = document.getElementById('accountToggle');
+  const label = document.getElementById('accountName');
+  const firstName = (fullName || '').trim().split(/\s+/)[0];
+  if (firstName) {
+    label.textContent = firstName;
+    toggle.setAttribute('aria-label', `Account, signed in as ${fullName.trim()}`);
+  } else {
+    label.textContent = 'Account';
+    toggle.removeAttribute('aria-label');
+  }
+}
+
 async function loadAuthUser() {
-  const options = await loadAuthOptions();
-  document.getElementById('devLoginForm').hidden = !options.dev_login_enabled;
+  authOptions = await loadAuthOptions();
+  document.getElementById('devLoginForm').hidden = !authOptions.dev_login_enabled;
   const actions = document.getElementById('authActions');
   try {
     const user = await fetchJson('/api/auth/me', {}, 'Unable to load session.');
-    document.getElementById('authUser').textContent =
-      `Signed in as ${user.display_name} <${user.email}> (${user.auth_provider})`;
+    document.getElementById('authUser').textContent = `Signed in as ${user.display_name}`;
     // The anonymous Local Owner (plain local dev) has no session to end.
-    actions.hidden = user.auth_provider === 'local';
+    const isLocalOwner = user.auth_provider === 'local';
+    actions.hidden = isLocalOwner;
+    showAccountName(isLocalOwner ? '' : user.display_name);
+    showProfilePhoto(isLocalOwner ? null : user);
+    // The saved theme may have been changed on another device.
+    if (user.settings && window.lifeInboxTheme) window.lifeInboxTheme.apply(user.settings.theme);
   } catch {
     document.getElementById('authUser').textContent = 'Not signed in';
     actions.hidden = true;
+    showAccountName('');
+    showProfilePhoto(null);
   }
 }
 
@@ -1177,13 +1394,13 @@ async function logoutSession() {
   }
 }
 
-async function logoutEverywhere() {
-  if (!window.confirm('Sign out of Life Inbox on every device?')) return;
+async function switchAccount() {
   try {
-    await fetchJson('/api/auth/logout-all', {method: 'POST'}, 'Unable to sign out everywhere.');
-    window.location.assign('/');
-  } catch (error) {
-    setStatus('authStatus', error.message || 'Sign-out failed.', true);
+    await fetchJson('/api/auth/logout', {method: 'POST'}, 'Unable to sign out.');
+    // Google shows its account picker, so a different account can be chosen.
+    window.location.assign(authOptions.google_enabled ? '/api/auth/google/start' : '/');
+  } catch {
+    setStatus('authStatus', 'Could not switch accounts. Please try again.', true);
   }
 }
 
