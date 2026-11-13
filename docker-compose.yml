@@ -37,6 +37,8 @@ services:
       LIFE_INBOX_ALLOWED_EMAIL_DOMAINS: ${LIFE_INBOX_ALLOWED_EMAIL_DOMAINS:-}
       LIFE_INBOX_TIMEZONE: ${LIFE_INBOX_TIMEZONE:-UTC}
       LIFE_INBOX_EMBEDDINGS: "1"
+      # Voice assistant (Jin): the key lives on the server and is shared by all users.
+      GNANI_API_KEY: ${GNANI_API_KEY:-}
     volumes:
       - uploads:/data/uploads
     depends_on:
