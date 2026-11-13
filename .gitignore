@@ -5,11 +5,17 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# Secrets — never commit real keys or Google client secrets
+.env
+.env.*
+!.env.example
+
+# Local data (databases, backups, uploaded files)
+data/*
+!data/.gitkeep
+
 # Editor / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-
-# Local environment
-.env

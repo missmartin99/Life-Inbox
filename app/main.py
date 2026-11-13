@@ -15,7 +15,14 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
+from starlette.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 
 from app.auto_analysis import AutoAnalyzer, auto_analysis_enabled
@@ -32,6 +39,7 @@ from app.capture.storage import (
 )
 from app.capture.url_fetch import fetch_url, validate_public_http_url
 from app.capture.voice_extract import process_voice_bytes, validate_audio_upload
+from app.config import load_config
 from app.privacy import redact
 from app.item_kinds import KIND_FIELDS, make_card
 from app.expenses import expense_summary
@@ -41,6 +49,9 @@ from app.flashcards import make_cards, next_review
 from app.resurface import resurface
 from app.api_access import WEBHOOK_EVENTS, deliver_webhooks, new_token
 from app.database import (
+    AnalysisAlreadyRunningError,
+    AuthRequiredError,
+    task_is_owned,
     add_api_token,
     add_webhook,
     delete_api_token,
@@ -78,6 +89,7 @@ from app.database import (
     fail_analysis_run,
     fail_item_processing,
     get_attention_board,
+    list_pending_tasks_by_priority,
     get_current_owner_id,
     get_daily_briefing,
     get_item_from_db,
@@ -104,6 +116,7 @@ from app.database import (
     update_note_in_db,
     update_topic_in_db,
 )
+import app.integrations.google_calendar as google_calendar
 from app.integrations.calendar import (
     CalendarWriteBlockedError,
     get_calendar_adapter,
@@ -121,6 +134,8 @@ from app.schemas import (
     SensitiveUpdate,
     AskRequest,
     AskResponse,
+    ProfileUpdate,
+    UserSettingsUpdate,
     CalendarConfirmRequest,
     CalendarPreviewRequest,
     ExtractedTextUpdate,
@@ -153,6 +168,16 @@ from app.schemas import (
 APP_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger(__name__)
 
+# Default strictness: beta/production refuse to start when misconfigured
+# (SQLite, short session secret, dev login on, missing Google keys, http URL).
+_startup_config = load_config()
+_docs_kwargs = (
+    {}
+    if _startup_config.environment == "local"
+    else {"docs_url": None, "redoc_url": None, "openapi_url": None}
+)
+
+
 class RevalidatingStaticFiles(StaticFiles):
     """Static files the browser must re-check on every load.
 
@@ -167,7 +192,7 @@ class RevalidatingStaticFiles(StaticFiles):
         return response
 
 
-app = FastAPI(title="Life Inbox")
+app = FastAPI(title="Life Inbox", **_docs_kwargs)
 app.mount(
     "/static",
     RevalidatingStaticFiles(directory=APP_DIR / "static"),
@@ -225,9 +250,41 @@ def _auto_analyze_owner(owner_id: int) -> None:
         _run_analysis("new", only_if_pending=True)
     finally:
         set_current_owner_id(None)
+    # New tasks may have due dates: put them on the calendar.
+    _schedule_calendar_sync(owner_id)
 
 
 auto_analyzer = AutoAnalyzer(_auto_analyze_owner)
+
+
+def _sync_calendar_for_owner(owner_id: int) -> None:
+    google_calendar.sync_tasks(load_config(strict=False), owner_id)
+
+
+calendar_syncer = google_calendar.CalendarSyncer(_sync_calendar_for_owner)
+
+# Requests after which tasks may have changed (added, re-dated, finished,
+# deleted with their note). Opening the inbox also retries a failed sync.
+CALENDAR_SYNC_PREFIXES = ("/api/items", "/api/notes", "/api/tasks", "/api/analyze")
+
+
+def _schedule_calendar_sync(owner_id: int) -> None:
+    """Queue a calendar sync if this person keeps tasks on Google Calendar."""
+    from app.database import calendar_sync_wanted
+
+    try:
+        if not google_calendar.calendar_feature_enabled(load_config(strict=False)):
+            return
+        if calendar_sync_wanted(owner_id):
+            calendar_syncer.schedule(owner_id)
+    except Exception:
+        logger.exception("Could not queue a calendar sync")
+
+
+def _may_change_tasks(method: str, path: str) -> bool:
+    if method == "GET":
+        return path == "/"
+    return method in STATE_CHANGING_METHODS and path.startswith(CALENDAR_SYNC_PREFIXES)
 
 
 def _trigger_auto_analysis() -> None:
@@ -240,42 +297,97 @@ def _trigger_auto_analysis() -> None:
     auto_analyzer.schedule(owner_id)
 
 
+PUBLIC_API_PATHS = {
+    "/api/health",
+    "/api/auth/google/start",
+    "/api/auth/google/callback",
+    "/api/auth/dev-login",
+    "/api/auth/logout",
+    "/api/auth/options",
+}
+STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+SIGNED_IN_PAGES = {"/", "/profile", "/settings"}  # pages that send visitors to /login
+
+
+def _owner_for_api_token(request: Request) -> Optional[int]:
+    """The owner of the API token in the Authorization header, or None."""
+    from app.api_access import hash_token, token_from_header
+    from app.database import owner_for_token_hash
+
+    api_token = token_from_header(request.headers.get("authorization"))
+    if not api_token:
+        return None
+    return owner_for_token_hash(hash_token(api_token))
+
+
 @app.middleware("http")
 async def bind_owner_from_session(request, call_next):
-    from app.auth import SESSION_COOKIE, parse_session_token
-    from app.config import load_config
-    from app.database import (
-        get_or_create_default_owner_id,
-        set_current_owner_id,
-    )
+    """Identify the user from the session cookie and gate the API.
 
-    token = request.cookies.get(SESSION_COOKIE)
-    owner_id = parse_session_token(token) if token else None
-    if owner_id is None:
-        # Programs (scripts, the MCP server) send "Authorization: Bearer li_..."
-        from app.api_access import hash_token, token_from_header
-        from app.database import owner_for_token_hash
+    The signed-in user's id is bound to this request only (a ContextVar), so
+    concurrent requests from different users can never see each other's id.
+    """
+    from app.auth import current_user_from_request, origin_allowed
+    from app.database import get_or_create_default_owner_id, set_current_owner_id
 
-        api_token = token_from_header(request.headers.get("authorization"))
-        if api_token:
-            owner_id = owner_for_token_hash(hash_token(api_token))
-            if owner_id is None:
+    config = load_config(strict=False)
+    path = request.url.path
+    is_api = path.startswith("/api/")
+
+    if (
+        is_api
+        and request.method in STATE_CHANGING_METHODS
+        and not origin_allowed(request, config)
+    ):
+        return JSONResponse(
+            {"detail": "Cross-origin request blocked."}, status_code=403
+        )
+
+    owner_id = None
+    if is_api or path in SIGNED_IN_PAGES:
+        # Database lookups run in a worker thread so they never block the
+        # event loop (and every other user's requests).
+        user = await run_in_threadpool(current_user_from_request, request)
+        if user is not None:
+            owner_id = user["id"]
+        elif is_api and request.headers.get("authorization"):
+            # Programs (scripts, the MCP server) send "Authorization: Bearer li_...".
+            token_owner = await run_in_threadpool(_owner_for_api_token, request)
+            if token_owner is None:
                 return JSONResponse({"detail": "Invalid API token"}, status_code=401)
-    if owner_id is None:
-        config = load_config(strict=False)
-        if config.environment == "local":
-            owner_id = get_or_create_default_owner_id()
+            owner_id = token_owner
+        elif config.local_anonymous_allowed:
+            owner_id = await run_in_threadpool(get_or_create_default_owner_id)
+
+    if is_api and path not in PUBLIC_API_PATHS and owner_id is None:
+        return JSONResponse(
+            {"detail": "Authentication required."}, status_code=401
+        )
+    if path in SIGNED_IN_PAGES and owner_id is None:
+        return RedirectResponse("/login", status_code=302)
+
     set_current_owner_id(owner_id)
     try:
         response = await call_next(request)
     finally:
         set_current_owner_id(None)
+    if (
+        owner_id is not None
+        and response.status_code < 400
+        and _may_change_tasks(request.method, path)
+    ):
+        await run_in_threadpool(_schedule_calendar_sync, owner_id)
     return response
+
+
+@app.exception_handler(AuthRequiredError)
+async def auth_required_handler(request, exc):
+    return JSONResponse({"detail": "Authentication required."}, status_code=401)
 
 
 @app.get("/api/health")
 def health():
-    from app.config import config_warnings, load_config
+    from app.config import config_warnings
 
     try:
         config = load_config(strict=False)
@@ -291,50 +403,413 @@ def health():
         return {"status": "degraded", "error": str(exc)}
 
 
-@app.get("/api/auth/me")
-def auth_me(request: Request):
-    from app.auth import SESSION_COOKIE, parse_session_token
-    from app.database import get_or_create_default_owner_id, get_user_by_id
+@app.get("/api/auth/options")
+def auth_options():
+    """Which sign-in controls the browser should show (public, no user data)."""
+    config = load_config(strict=False)
+    return {
+        "google_enabled": config.google_enabled,
+        "dev_login_enabled": bool(
+            config.allow_dev_login and config.environment == "local"
+        ),
+        "local_anonymous": config.local_anonymous_allowed,
+    }
 
-    token = request.cookies.get(SESSION_COOKIE)
-    user_id = parse_session_token(token) if token else None
-    if user_id is not None:
-        user = get_user_by_id(user_id)
-        if user is not None:
-            return user
-    # Local anonymous maps to default owner identity for display only.
-    return get_user_by_id(get_or_create_default_owner_id())
+
+@app.post("/api/me/avatar")
+async def upload_avatar(file: UploadFile = File(...)):
+    """Set your profile photo. It replaces the Google picture until removed."""
+    from app.database import require_owner_id, set_user_avatar_path
+    from app.profile_photos import make_avatar_bytes, new_avatar_path
+    from app.storage_backend import get_storage_backend
+
+    user_id = require_owner_id()
+    data = await file.read()
+    try:
+        validate_image_upload(file.filename or "photo", file.content_type, data)
+        photo = make_avatar_bytes(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    storage = get_storage_backend()
+    path = storage.store_bytes(new_avatar_path(user_id), photo)
+    try:
+        user, previous = set_user_avatar_path(user_id, path)
+    except Exception:
+        storage.delete(path)
+        raise
+    storage.delete(previous)
+    return user
+
+
+@app.get("/api/me/avatar")
+def get_avatar():
+    """Your uploaded profile photo (only ever your own)."""
+    from app.database import get_user_avatar_path, require_owner_id
+    from app.storage_backend import get_storage_backend
+
+    path = get_user_avatar_path(require_owner_id())
+    if not path:
+        raise HTTPException(status_code=404, detail="No profile photo.")
+    try:
+        data = get_storage_backend().read_bytes(path)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="No profile photo.") from exc
+    # The URL carries a per-upload version, so the browser may keep it.
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+@app.delete("/api/me/avatar")
+def remove_avatar():
+    """Remove your uploaded photo; the Google picture shows again."""
+    from app.database import require_owner_id, set_user_avatar_path
+    from app.storage_backend import get_storage_backend
+
+    user, previous = set_user_avatar_path(require_owner_id(), None)
+    get_storage_backend().delete(previous)
+    return user
+
+
+@app.patch("/api/me/profile")
+def update_profile(payload: ProfileUpdate):
+    """Edit your name and date of birth. Email comes from Google."""
+    from app.database import require_owner_id, update_user_profile
+    from app.profile import clean_date_of_birth, clean_display_name
+
+    changes = {}
+    try:
+        if "display_name" in payload.model_fields_set:
+            changes["display_name"] = clean_display_name(payload.display_name or "")
+        if "date_of_birth" in payload.model_fields_set:
+            changes["date_of_birth"] = clean_date_of_birth(payload.date_of_birth)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return update_user_profile(require_owner_id(), **changes)
+
+
+@app.patch("/api/me/settings")
+def save_settings(payload: UserSettingsUpdate):
+    """Change notification and theme settings. Returns every setting."""
+    from app.database import require_owner_id, update_user_settings
+
+    changes = {
+        key: value
+        for key, value in payload.model_dump().items()
+        if key in payload.model_fields_set and value is not None
+    }
+    return update_user_settings(require_owner_id(), changes)
+
+
+GOOGLE_PERMISSIONS_URL = "https://myaccount.google.com/connections"
+
+
+@app.get("/api/me/connections")
+def connected_apps():
+    """The outside services this account uses, and whether each is on."""
+    import os
+
+    from app.database import get_user_by_id, require_owner_id
+
+    owner_id = require_owner_id()
+    user = get_user_by_id(owner_id)
+    calendar = google_calendar.calendar_status(
+        load_config(strict=False), owner_id, syncing=calendar_syncer.is_busy(owner_id)
+    )
+    ai_on = bool(os.getenv("OPENAI_API_KEY", "").strip())
+    return {
+        "apps": [
+            {
+                "id": "google",
+                "name": "Google",
+                "purpose": "Sign-in, your name and profile picture",
+                "status": "connected" if user["google_connected"] else "not_connected",
+                "detail": (
+                    f"Signed in as {user['email']}. You sign in with Google, so it "
+                    "stays connected. You can remove Life Inbox's access in your "
+                    "Google Account."
+                    if user["google_connected"]
+                    else "This account does not use Google sign-in."
+                ),
+                "manage_url": GOOGLE_PERMISSIONS_URL if user["google_connected"] else None,
+            },
+            {
+                "id": "google_calendar",
+                "name": "Google Calendar",
+                "purpose": "Put tasks with due dates on your calendar",
+                "status": calendar["status"],
+                "detail": _calendar_detail(calendar),
+                "manage_url": None,  # Settings shows Connect / Disconnect instead
+                "calendar": calendar,
+            },
+            {
+                "id": "openai",
+                "name": "OpenAI",
+                "purpose": "Organizes your notes and answers questions with AI",
+                "status": "active" if ai_on else "off",
+                "detail": (
+                    "On for everyone on this server. The text of your notes is "
+                    "sent to OpenAI to be organized."
+                    if ai_on
+                    else "Off on this server. Notes are organized by Life Inbox's "
+                    "built-in rules, and nothing is sent to OpenAI."
+                ),
+                "manage_url": None,
+            },
+        ]
+    }
+
+
+def _calendar_detail(calendar: dict) -> str:
+    name = calendar["calendar_name"]
+    if calendar["status"] == "unavailable":
+        return "Not available on this server. Your tasks stay in Life Inbox."
+    if calendar["status"] == "not_connected":
+        return (
+            f"Adds tasks that have a due date to a separate \u201c{name}\u201d "
+            "calendar in your Google Calendar. Life Inbox can only see and "
+            "change that one calendar, never your other events."
+        )
+    if calendar["status"] == "needs_reconnect":
+        return calendar["last_error"] or "Reconnect to keep your tasks on your calendar."
+    account = f" for {calendar['email']}" if calendar["email"] else ""
+    return (
+        f"Tasks with a due date go on the \u201c{name}\u201d calendar{account}, "
+        "and come off when you finish or dismiss them."
+    )
+
+
+@app.get("/api/auth/me")
+def auth_me():
+    from app.database import get_current_owner_id, get_user_by_id
+
+    owner_id = get_current_owner_id()
+    user = get_user_by_id(owner_id) if owner_id is not None else None
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return user
 
 
 @app.post("/api/auth/dev-login")
-def auth_dev_login(payload: dict, response: Response):
-    from app.auth import dev_login_user, set_session_cookie
+def auth_dev_login(payload: dict, request: Request, response: Response):
+    from app.auth import dev_login_user, start_session
 
     email = str(payload.get("email", "")).strip()
     display_name = payload.get("display_name")
     user = dev_login_user(email, display_name=display_name)
-    set_session_cookie(response, user["id"])
+    start_session(response, request, user["id"])
     return user
 
 
 @app.post("/api/auth/logout")
-def auth_logout(response: Response):
-    from app.auth import clear_session_cookie
+def auth_logout(request: Request, response: Response):
+    from app.auth import end_session
 
-    clear_session_cookie(response)
+    end_session(response, request)
     return {"status": "logged_out"}
 
 
+@app.post("/api/auth/logout-all")
+def auth_logout_all(request: Request, response: Response):
+    """Sign out of every device (all of this user's sessions)."""
+    from app.auth import clear_session_cookie
+    from app.database import require_owner_id, revoke_all_auth_sessions
+
+    revoked = revoke_all_auth_sessions(require_owner_id())
+    clear_session_cookie(response)
+    return {"status": "logged_out_everywhere", "sessions_revoked": revoked}
+
+
 @app.get("/api/auth/google/start")
-def auth_google_start():
-    """Stub only — real Google OAuth is not activated in this build."""
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Google sign-in stub only. Real OAuth consent is not enabled. "
-            "Use /api/auth/dev-login for private-beta local testing."
-        ),
+def auth_google_start(next: Optional[str] = None):
+    from app.google_oauth import build_authorization
+
+    config = load_config(strict=False)
+    if not config.google_enabled:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "Google OAuth is not configured. Set LIFE_INBOX_AUTH_MODE=google, "
+                "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET."
+            ),
+        )
+    url, cookie_value = build_authorization(config, next)
+    return _redirect_to_google(config, url, cookie_value)
+
+
+def _redirect_to_google(config, url: str, cookie_value: str) -> RedirectResponse:
+    from app.google_oauth import OAUTH_COOKIE, OAUTH_COOKIE_TTL_SECONDS
+
+    response = RedirectResponse(url, status_code=302)
+    response.set_cookie(
+        key=OAUTH_COOKIE,
+        value=cookie_value,
+        max_age=OAUTH_COOKIE_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",  # must be Lax: Google redirects back via a top-level GET
+        secure=config.cookie_secure,
+        path="/api/auth/google",
     )
+    return response
+
+
+@app.get("/api/auth/google/calendar/start")
+def calendar_connect_start():
+    """Ask Google for permission to keep a "Life Inbox" calendar (signed in only)."""
+    from app.database import get_user_by_id, require_owner_id
+
+    config = load_config(strict=False)
+    if not google_calendar.calendar_feature_enabled(config):
+        raise HTTPException(
+            status_code=404, detail="Google Calendar is not available on this server."
+        )
+    user = get_user_by_id(require_owner_id())
+    url, cookie_value = google_calendar.build_connect_authorization(
+        config, user_id=user["id"], login_hint=user["email"]
+    )
+    return _redirect_to_google(config, url, cookie_value)
+
+
+@app.get("/api/auth/google/callback")
+def auth_google_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    from app.auth import start_session
+    from app.database import upsert_google_user
+    from app.google_oauth import (
+        OAUTH_COOKIE,
+        GoogleAuthError,
+        email_allowed,
+        fetch_google_identity,
+        read_state_cookie,
+    )
+
+    config = load_config(strict=False)
+    if not config.google_enabled:
+        raise HTTPException(status_code=501, detail="Google OAuth is not configured.")
+
+    def fail(reason: str) -> RedirectResponse:
+        failed = RedirectResponse(f"/login?error={reason}", status_code=302)
+        failed.delete_cookie(OAUTH_COOKIE, path="/api/auth/google")
+        return failed
+
+    saved, state_error = None, "state"
+    try:
+        saved = read_state_cookie(config, request.cookies.get(OAUTH_COOKIE), state)
+    except GoogleAuthError as exc:
+        state_error = exc.code
+    if saved is not None and saved["purpose"] == "calendar":
+        return _finish_calendar_connect(config, saved, code, error)
+    if error:
+        return fail("denied")
+    if saved is None:
+        return fail(state_error)
+    try:
+        if not code:
+            raise GoogleAuthError("failed")
+        identity = fetch_google_identity(config, code, saved["verifier"])
+        if not email_allowed(config, identity["email"]):
+            raise GoogleAuthError("not_allowed")
+        user = upsert_google_user(
+            sub=identity["sub"],
+            email=identity["email"],
+            name=identity["name"],
+            picture=identity.get("picture"),
+        )
+    except GoogleAuthError as exc:
+        return fail(exc.code)
+    except ValueError:
+        return fail("failed")
+    except Exception:
+        logger.exception("Google sign-in failed")
+        return fail("failed")
+
+    response = RedirectResponse(saved["next"], status_code=302)
+    response.delete_cookie(OAUTH_COOKIE, path="/api/auth/google")
+    start_session(response, request, user["id"])
+    return response
+
+
+def _finish_calendar_connect(config, saved: dict, code, error) -> RedirectResponse:
+    """Second half of "Connect Google Calendar"; always lands back on Settings."""
+    from app.database import get_current_owner_id
+    from app.google_oauth import OAUTH_COOKIE
+
+    def done(result: str) -> RedirectResponse:
+        response = RedirectResponse(f"/settings?calendar={result}", status_code=302)
+        response.delete_cookie(OAUTH_COOKIE, path="/api/auth/google")
+        return response
+
+    if error:
+        return done("denied")
+    owner_id = get_current_owner_id()
+    if owner_id is None or owner_id != saved["user_id"]:
+        # Started by someone else (or the session ended): never attach a
+        # calendar to the wrong account.
+        return done("wrong_user")
+    if not google_calendar.calendar_feature_enabled(config):
+        return done("unavailable")
+    if not code:
+        return done("failed")
+    try:
+        google_calendar.finish_connect(config, owner_id, code, saved["verifier"])
+    except google_calendar.CalendarConnectError as exc:
+        return done(exc.code)
+    except Exception:
+        logger.exception("Connecting Google Calendar failed")
+        return done("failed")
+    calendar_syncer.schedule(owner_id)
+    return done("connected")
+
+
+LOGIN_ERRORS = {
+    "denied": "Sign-in was cancelled.",
+    "state": "That sign-in link expired. Please try again.",
+    "email_unverified": "Your Google email address is not verified.",
+    "not_allowed": "This Google account is not on the invite list.",
+    "failed": "Google sign-in failed. Please try again.",
+}
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, error: Optional[str] = None):
+    import html
+
+    from app.auth import current_user_from_request
+
+    config = load_config(strict=False)
+    if config.local_anonymous_allowed or current_user_from_request(request):
+        return RedirectResponse("/", status_code=302)
+    message = LOGIN_ERRORS.get(error or "", "")
+    page = (APP_DIR / "templates" / "login.html").read_text(encoding="utf-8")
+    button = (
+        GOOGLE_SIGN_IN_BUTTON
+        if config.google_enabled
+        else '<p class="login-error">Google sign-in is not configured on this server.</p>'
+    )
+    return _versioned_static_refs(
+        page.replace("__ERROR__", html.escape(message)).replace("__BUTTON__", button)
+    )
+
+
+# Google's standard "Sign in with Google" button (multicolour G, neutral
+# background), as its branding guidelines ask.
+GOOGLE_SIGN_IN_BUTTON = (
+    '<a class="gsi-btn" href="/api/auth/google/start">'
+    '<svg class="gsi-icon" viewBox="0 0 48 48" aria-hidden="true">'
+    '<path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>'
+    '<path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>'
+    '<path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>'
+    '<path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>'
+    "</svg>"
+    '<span class="gsi-text">Sign in with Google</span>'
+    "</a>"
+)
 
 
 def _process_url_item(item_id: int) -> dict:
@@ -1028,6 +1503,26 @@ def attention_board():
         ) from exc
 
 
+@app.get("/api/notifications")
+def notifications():
+    """Pending tasks for the bell, highest priority first, per your settings."""
+    from app.database import get_user_settings, require_owner_id
+
+    settings = get_user_settings(require_owner_id())
+    try:
+        return {
+            **list_pending_tasks_by_priority(settings["bell_scope"]),
+            "show_badge": settings["bell_badge"],
+            "overdue_alert": settings["bell_overdue_alert"],
+        }
+    except Exception as exc:
+        logger.exception("Failed to load notifications")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to load your pending tasks. Please try again.",
+        ) from exc
+
+
 @app.get("/api/briefing")
 def daily_briefing():
     try:
@@ -1118,7 +1613,7 @@ def calendar_preview(payload: CalendarPreviewRequest):
 @app.post("/api/calendar/confirm")
 def calendar_confirm(payload: CalendarConfirmRequest):
     draft = get_draft(payload.draft_id)
-    if draft is None:
+    if draft is None or not task_is_owned(draft.task_id):
         raise HTTPException(
             status_code=404,
             detail="Calendar draft not found. Create a preview first.",
@@ -1159,6 +1654,40 @@ def calendar_confirm(payload: CalendarConfirmRequest):
     }
 
 
+@app.get("/api/calendar/google")
+def google_calendar_status():
+    from app.database import require_owner_id
+
+    owner_id = require_owner_id()
+    return google_calendar.calendar_status(
+        load_config(strict=False), owner_id, syncing=calendar_syncer.is_busy(owner_id)
+    )
+
+
+@app.post("/api/calendar/google/sync")
+def google_calendar_sync_now():
+    from app.database import require_owner_id
+
+    owner_id = require_owner_id()
+    config = load_config(strict=False)
+    if not google_calendar.calendar_status(config, owner_id)["connected"]:
+        raise HTTPException(status_code=409, detail="Google Calendar is not connected.")
+    calendar_syncer.schedule(owner_id)
+    return google_calendar.calendar_status(config, owner_id, syncing=True)
+
+
+@app.delete("/api/calendar/google")
+def google_calendar_disconnect():
+    """Take the Life Inbox calendar off Google Calendar and give the access back."""
+    from app.database import require_owner_id
+
+    owner_id = require_owner_id()
+    config = load_config(strict=False)
+    with calendar_syncer.owner_lock(owner_id):  # never mid-sync
+        result = google_calendar.disconnect(config, owner_id)
+    if not result["disconnected"]:
+        raise HTTPException(status_code=404, detail="Google Calendar is not connected.")
+    return {**result, "calendar": google_calendar.calendar_status(config, owner_id)}
 from app.assistant_routes import router as assistant_router  # noqa: E402
 
 app.include_router(assistant_router)
@@ -1652,6 +2181,11 @@ def analyze_inbox(scope: str = Query("new", pattern="^(new|all)$")):
     """
     try:
         return _run_analysis(scope)
+    except AnalysisAlreadyRunningError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="An analysis is already running. Please wait for it to finish.",
+        ) from exc
     except Exception as exc:
         logger.exception("Failed to analyze inbox")
         raise HTTPException(
@@ -1685,4 +2219,16 @@ def _versioned_static_refs(html: str) -> str:
 @app.get("/", response_class=HTMLResponse)
 def index():
     html = (APP_DIR / "templates" / "index.html").read_text(encoding="utf-8")
+    return _versioned_static_refs(html)
+
+
+@app.get("/profile", response_class=HTMLResponse)
+def profile_page():
+    html = (APP_DIR / "templates" / "profile.html").read_text(encoding="utf-8")
+    return _versioned_static_refs(html)
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page():
+    html = (APP_DIR / "templates" / "settings.html").read_text(encoding="utf-8")
     return _versioned_static_refs(html)
