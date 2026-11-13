@@ -94,7 +94,15 @@ LIFE_INBOX_ALLOW_DEV_LOGIN=1
 OPENAI_API_KEY=...
 OPENAI_BASE_URL=https://api.deepseek.com
 OPENAI_MODEL=deepseek-chat
+
+# Voice assistant (Jin) -- Gnani speech-to-text and spoken replies.
+# The key lives only here, on the server: everyone who opens the site uses it,
+# and nobody needs their own key or ffmpeg (the image already includes ffmpeg).
+GNANI_API_KEY=...
 ```
+
+After changing `.env`, recreate the web container so it picks the key up
+(`docker compose ... up -d --force-recreate web`).
 
 ## 5. Start it
 
