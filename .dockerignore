@@ -1,0 +1,10 @@
+# Never copy secrets or local data into the Docker image.
+.env
+.env.*
+.venv/
+venv/
+data/
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/

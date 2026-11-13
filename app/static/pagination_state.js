@@ -52,19 +52,20 @@
    * @param {object} state
    * @param {Array} rows - API rows for this page (all item types)
    * @param {{append?: boolean}} options
-   * @returns {{textNotes: Array, hasMore: boolean}}
+   * @returns {{items: Array, hasMore: boolean}} the rows to render: every
+   *   capture type (text, link, PDF, image, voice), not only text notes
    */
   function applyFetchedPage(state, rows, {append = false} = {}) {
     if (!append) {
       resetForReload(state);
     }
-    const textNotes = rows.filter(item => item.item_type === 'text');
+    const items = rows.slice();
     state.loadedItems = append
-      ? state.loadedItems.concat(textNotes)
-      : textNotes;
+      ? state.loadedItems.concat(items)
+      : items;
     state.loadedOffset += rows.length;
     state.hasMore = rows.length === state.pageSize;
-    return {textNotes, hasMore: state.hasMore};
+    return {items, hasMore: state.hasMore};
   }
 
   /**

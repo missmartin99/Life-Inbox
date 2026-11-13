@@ -7,6 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Optional
 
+from app.retrieval import embeddings
 from app.retrieval.documents import TextPassage, _tokenize, load_passages
 
 
@@ -15,7 +16,8 @@ class RankedPassage:
     score: float
     passage: TextPassage
     keyword_score: float
-    semantic_score: float
+    semantic_score: float  # TF-IDF word overlap (the original "semantic" score)
+    meaning_score: float = 0.0  # embedding similarity, 0 when embeddings are off
 
 
 def _idf(doc_freq: int, corpus_size: int) -> float:
@@ -51,12 +53,33 @@ def _cosine(a: Counter[str], b: Counter[str]) -> float:
     return dot / (norm_a * norm_b)
 
 
+# Filler words that appear in almost every note, so matching them says nothing
+# about relevance ("money I owe for the flat" must not match a passport note
+# just because both contain "for" and "i").
+STOPWORDS = {
+    "a", "an", "and", "are", "at", "be", "by", "can", "do", "for", "from",
+    "i", "in", "is", "it", "me", "my", "of", "on", "or", "should", "so",
+    "that", "the", "this", "to", "was", "we", "what", "when", "where",
+    "which", "who", "will", "with", "you", "your",
+}
+
+
+def _word_matches(token: str, words: set[str]) -> bool:
+    """Whole-word match; words of 4+ letters also match longer forms
+    ("pay" must equal "pay", but "renew" also matches "renewal")."""
+    if token in words:
+        return True
+    return len(token) >= 4 and any(word.startswith(token) for word in words)
+
+
 def _keyword_score(query_tokens: list[str], passage: TextPassage) -> float:
-    if not query_tokens:
+    """Share of the meaningful query words that appear in the passage."""
+    tokens = [t for t in query_tokens if t not in STOPWORDS]
+    if not tokens:
         return 0.0
-    hay = f"{passage.title} {passage.passage}".lower()
-    hits = sum(1 for token in query_tokens if token in hay)
-    return hits / len(query_tokens)
+    words = set(_tokenize(f"{passage.title} {passage.passage}"))
+    hits = sum(1 for token in tokens if _word_matches(token, words))
+    return hits / len(tokens)
 
 
 def search_passages(
@@ -83,11 +106,22 @@ def search_passages(
     for token in query_tokens:
         query_vec[token] += 1.0
 
+    # Embedding similarity per passage, or None when embeddings are off.
+    meanings = embeddings.meaning_scores(
+        q, [f"{p.title} {p.passage}" for p in passages]
+    )
+
     ranked: list[RankedPassage] = []
-    for passage, vec in zip(passages, vectors):
+    for index, (passage, vec) in enumerate(zip(passages, vectors)):
         kw = _keyword_score(query_tokens, passage)
         sem = _cosine(query_vec, vec)
-        score = 0.55 * kw + 0.45 * sem
+        if meanings is None:
+            meaning = 0.0
+            score = 0.55 * kw + 0.45 * sem  # keyword-only search (as before)
+        else:
+            # Hybrid: meaning matters most, exact words still help.
+            meaning = meanings[index]
+            score = 0.6 * meaning + 0.3 * kw + 0.1 * sem
         if score < min_score:
             continue
         ranked.append(
@@ -96,6 +130,7 @@ def search_passages(
                 passage=passage,
                 keyword_score=kw,
                 semantic_score=sem,
+                meaning_score=meaning,
             )
         )
     ranked.sort(key=lambda row: row.score, reverse=True)

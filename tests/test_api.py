@@ -136,6 +136,9 @@ def test_create_and_list_canonical_text_item(client):
         "owner_user_id": item["owner_user_id"],
         "created_at": item["created_at"],
         "updated_at": None,
+        "is_sensitive": False,
+        "kind": None,
+        "kind_fields": None,
     }
     assert item["owner_user_id"] is not None
     assert client.get("/api/items").json() == [item]
@@ -980,16 +983,20 @@ def test_valid_mocked_openai_output_is_validated(monkeypatch):
             "Low": [],
         },
     }
-    fake_responses = SimpleNamespace(
+    fake_completions = SimpleNamespace(
         create=lambda **_kwargs: SimpleNamespace(
-            output_text=json.dumps(model_output)
+            choices=[
+                SimpleNamespace(message=SimpleNamespace(content=json.dumps(model_output)))
+            ]
         )
     )
     monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
     monkeypatch.setattr(
         openai,
         "OpenAI",
-        lambda: SimpleNamespace(responses=fake_responses),
+        lambda: SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        ),
     )
 
     result = organizer.analyze_inbox_with_openai(
@@ -1011,16 +1018,20 @@ def test_malformed_mocked_openai_output_uses_fallback(monkeypatch):
 
     from app import organizer
 
-    fake_responses = SimpleNamespace(
+    fake_completions = SimpleNamespace(
         create=lambda **_kwargs: SimpleNamespace(
-            output_text="not valid JSON"
+            choices=[
+                SimpleNamespace(message=SimpleNamespace(content="not valid JSON"))
+            ]
         )
     )
     monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
     monkeypatch.setattr(
         openai,
         "OpenAI",
-        lambda: SimpleNamespace(responses=fake_responses),
+        lambda: SimpleNamespace(
+            chat=SimpleNamespace(completions=fake_completions)
+        ),
     )
 
     result = organizer.analyze_inbox_with_openai(
@@ -2860,3 +2871,104 @@ def test_ambiguous_dates_are_used_without_asking_for_confirmation(
     task = next(t for t in entries if t["text"] == "Pay rent")
     preview = client.post("/api/calendar/preview", json={"task_id": task["id"]})
     assert preview.status_code == 200
+
+
+# --- Redesigned UI: newest-first notes and a readable dashboard -----------------
+
+
+def test_items_can_be_listed_newest_first(client):
+    ids = [_add_note(client, f"Note number {index}") for index in range(3)]
+
+    oldest_first = client.get("/api/items").json()
+    newest_first = client.get("/api/items?sort=newest").json()
+
+    assert [item["id"] for item in oldest_first] == ids
+    assert [item["id"] for item in newest_first] == ids[::-1]
+    paged = client.get("/api/items?sort=newest&limit=1&offset=1").json()
+    assert [item["id"] for item in paged] == [ids[1]]
+    assert client.get("/api/items?sort=sideways").status_code == 422
+
+
+def test_dashboard_names_related_notes_and_counts_items(client):
+    first = _add_note(client, "Renew car insurance soon")
+    second = _add_note(client, "Renew the car insurance soon")
+    assert client.post("/api/analyze").status_code == 200
+
+    dashboard = client.get("/api/dashboard").json()
+
+    assert dashboard["item_count"] == 2
+    related = dashboard["related_items"]
+    assert related, "the two near-identical notes should be linked"
+    assert {related[0]["item_id_a"], related[0]["item_id_b"]} == {first, second}
+    assert related[0]["title_a"] and related[0]["title_b"]
+    assert all(item["effective_title"] for item in dashboard["recently_captured"])
+    scores = [relation["score"] for relation in related]
+    assert scores == sorted(scores, reverse=True)
+
+    # A link to a note that no longer exists is not shown.
+    assert client.delete(f"/api/items/{second}").status_code == 204
+    after = client.get("/api/dashboard").json()
+    assert after["item_count"] == 1
+    assert after["related_items"] == []
+
+
+def test_dashboard_says_what_actually_needs_attention(client):
+    note_id = _add_note(client, "Call the bank about the card")
+    other_id = _add_note(client, "Buy stamps")
+
+    waiting = client.get("/api/dashboard").json()["needs_review"]
+    assert {entry["id"] for entry in waiting} == {note_id, other_id}
+    assert {entry["reason"] for entry in waiting} == {"Waiting to be organized"}
+
+    assert client.post("/api/analyze").status_code == 200
+    assert client.get("/api/dashboard").json()["needs_review"] == []
+
+    # Deleting a note is not a reason to flag the ones that are left.
+    assert client.delete(f"/api/items/{other_id}").status_code == 204
+    assert client.get("/api/dashboard").json()["needs_review"] == []
+
+    client.put(
+        f"/api/items/{note_id}",
+        json={"raw_text": "Call the bank about the new card"},
+    )
+    edited = client.get("/api/dashboard").json()["needs_review"]
+    assert [entry["id"] for entry in edited] == [note_id]
+    assert edited[0]["reason"] == "Edited, being organized again"
+
+
+def test_dashboard_only_shows_the_signed_in_users_notes(client):
+    client.post("/api/auth/dev-login", json={"email": "alice3@example.com"})
+    alice_note = _add_note(client, "Alice private note about her salary")
+    client.post("/api/analyze")
+
+    client.post("/api/auth/dev-login", json={"email": "bob3@example.com"})
+    bob_note = _add_note(client, "Bob note about groceries")
+    dashboard = client.get("/api/dashboard").json()
+
+    seen = {item["id"] for item in dashboard["recently_captured"]}
+    seen |= {item["id"] for item in dashboard["high_priority"]}
+    seen |= {item["id"] for item in dashboard["needs_review"]}
+    assert seen == {bob_note}
+    assert alice_note not in seen
+    assert dashboard["item_count"] == 1
+
+
+def test_page_has_the_redesigned_sections(client):
+    html = client.get("/").text
+
+    for element_id in (
+        "dashboardSummary",
+        "notesSummary",
+        "notesStatus",
+        "quickBadge",
+        "clearFiltersButton",
+    ):
+        assert f'id="{element_id}"' in html
+    assert "askExample('What do I have to do today?')" in html
+    assert "Raw saved notes" not in html
+    assert "Organized dashboard" not in html
+    assert "when you are ready" not in html
+
+    script = client.get("/static/app.js").text
+    assert "sort', 'newest'" in script
+    assert "window.confirm" not in script

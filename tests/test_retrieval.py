@@ -57,13 +57,16 @@ def _mock_ask_openai(monkeypatch, output_text=None, *, raise_on_create=None):
     def create(**_kwargs):
         if raise_on_create is not None:
             raise raise_on_create
-        return SimpleNamespace(output_text=output_text)
+        message = SimpleNamespace(content=output_text)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
     monkeypatch.setenv("OPENAI_API_KEY", "configured-for-test")
     monkeypatch.setattr(
         openai,
         "OpenAI",
-        lambda: SimpleNamespace(responses=SimpleNamespace(create=create)),
+        lambda: SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        ),
     )
 
 
@@ -294,3 +297,50 @@ def test_ask_user_isolation_prevents_cross_account_citations(client, monkeypatch
     data = ask.json()
     assert all(c["item_id"] != alice_item["id"] for c in data["citations"])
     assert "yacht" not in data["answer"].lower()
+
+
+# --- keyword scoring: whole words, no filler words ----------------------------
+
+
+def _passage(text):
+    from app.retrieval.documents import TextPassage
+
+    return TextPassage(
+        item_id=1, item_type="text", title="Item 1", passage=text, source_kind="original"
+    )
+
+
+def _kw(query, text):
+    from app.retrieval.documents import _tokenize
+    from app.retrieval.search import _keyword_score
+
+    return _keyword_score(_tokenize(query), _passage(text))
+
+
+def test_filler_words_do_not_count_as_matches():
+    # Found on the live site: "for" was inside "before", "i" inside "Item".
+    assert _kw("money I owe for the flat", "Renew passport before December 20") == 0
+
+
+def test_keyword_match_is_whole_word():
+    assert _kw("art", "Start the report") == 0  # "art" is only inside "start"
+
+
+def test_longer_words_still_match_their_other_forms():
+    assert _kw("renew passport", "Passport renewal due in March") == 1.0
+    assert _kw("pay", "Payment for the gym") == 0  # short words must match exactly
+    assert _kw("pay rent", "Pay rent to the landlord") == 1.0
+
+
+def test_question_only_filler_words_scores_zero():
+    assert _kw("what is the", "What is the plan") == 0
+
+
+def test_ask_admits_it_does_not_know(client):
+    client.post("/api/items", json={"raw_text": "Renew passport before December 20"})
+    client.post("/api/items", json={"raw_text": "Dentist appointment Thursday 4pm"})
+
+    answer = client.post("/api/ask", json={"question": "money I owe for the flat"}).json()
+
+    assert answer["confidence"] == "insufficient"
+    assert answer["citations"] == []

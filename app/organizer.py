@@ -1,12 +1,11 @@
 import json
 import logging
-import os
 import re
 
+from app.privacy import HIDDEN_TEXT, ai_is_configured, ask_ai
 from app.schemas import AnalysisResult
 
 
-MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 logger = logging.getLogger(__name__)
 
 
@@ -185,14 +184,18 @@ def analyze_inbox_with_openai(notes: list[dict]) -> dict:
             notes,
         )
 
-    if not os.getenv("OPENAI_API_KEY"):
+    if not ai_is_configured():
         return validate_analysis_result(fallback_analyze(notes), notes)
 
     try:
-        from openai import OpenAI
-        client = OpenAI()
-
-        compact_notes = [{"id": n["id"], "text": n["text"]} for n in notes]
+        # Sensitive items still get a bucket, but the AI never sees their text.
+        compact_notes = [
+            {
+                "id": n["id"],
+                "text": HIDDEN_TEXT if n.get("is_sensitive") else n["text"],
+            }
+            for n in notes
+        ]
 
         prompt = f"""
 You are the organization engine for a personal Life Inbox.
@@ -256,12 +259,8 @@ Saved notes:
 {json.dumps(compact_notes, ensure_ascii=False)}
 """
 
-        response = client.responses.create(
-            model=MODEL,
-            input=prompt,
-            max_output_tokens=int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "8000")),
-        )
-        result = extract_json_object(response.output_text)
+        reply = ask_ai(prompt, feature="analyze")
+        result = extract_json_object(reply)
         result["mode"] = "openai"
         return validate_analysis_result(result, notes)
 

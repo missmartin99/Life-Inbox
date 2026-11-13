@@ -1,0 +1,13 @@
+# Caddy gets a free HTTPS certificate for DOMAIN automatically (Let's Encrypt)
+# and forwards requests to the Life Inbox container.
+{$DOMAIN} {
+	# Temporary password gate until real login (auth feature) is merged.
+	# Programs sending a Life Inbox API token ("Bearer li_...") skip it,
+	# because the app itself checks the token.
+	@needs_password not header Authorization "Bearer li_*"
+	basic_auth @needs_password {
+		{$SITE_USER} {$SITE_PASSWORD_HASH}
+	}
+
+	reverse_proxy web:8000
+}

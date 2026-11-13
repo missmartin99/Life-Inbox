@@ -42,6 +42,9 @@
         <button type="button" role="tab" class="tab" id="tab-ask" data-tab="ask" aria-controls="panel-ask" aria-selected="false" tabindex="-1"><span class="tab-no">02</span>Ask<i class="tab-dot" aria-hidden="true"></i></button>
         <button type="button" role="tab" class="tab" id="tab-dashboard" data-tab="dashboard" aria-controls="panel-dashboard" aria-selected="false" tabindex="-1"><span class="tab-no">03</span>Dashboard<i class="tab-dot" aria-hidden="true"></i></button>
         <button type="button" role="tab" class="tab" id="tab-notes" data-tab="notes" aria-controls="panel-notes" aria-selected="false" tabindex="-1"><span class="tab-no">04</span>Notes<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-entities" data-tab="entities" aria-controls="panel-entities" aria-selected="false" tabindex="-1"><span class="tab-no">05</span>Entities Treemap<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-cards" data-tab="cards" aria-controls="panel-cards" aria-selected="false" tabindex="-1"><span class="tab-no">06</span>Smart Cards<i class="tab-dot" aria-hidden="true"></i></button>
+        <button type="button" role="tab" class="tab" id="tab-developer" data-tab="developer" aria-controls="panel-developer" aria-selected="false" tabindex="-1"><span class="tab-no">07</span>API & MCP<i class="tab-dot" aria-hidden="true"></i></button>
         <span class="tab-indicator" aria-hidden="true"></span>
       </div>
 
@@ -82,7 +85,7 @@
         <div class="hero-veil" aria-hidden="true"></div>
         <div class="wrap hero-inner">
           <h1 class="hero-title" data-split="glyph">Life Inbox</h1>
-          <p class="sub hero-tagline" data-rev>Capture first. Organize the whole inbox with AI when you are ready.</p>
+          <p class="sub hero-tagline" data-rev>Capture anything. Life Inbox sorts it and finds the things you have to do.</p>
 
           <div class="composer-stage" data-rev>
           <!-- Jin, a grey Persian who naps on the composer (behaviour in playful.js). -->
@@ -236,7 +239,7 @@
 
           <div class="quick-actions" data-rev>
             <button type="button" class="secondary quick quick-ask" data-goto="ask">Ask my inbox</button>
-            <button type="button" class="secondary quick quick-dashboard" data-goto="dashboard">Open dashboard</button>
+            <button type="button" class="secondary quick quick-dashboard" data-goto="dashboard">Open dashboard<span id="quickBadge" class="quick-badge" hidden></span></button>
           </div>
         </div>
       </div>
@@ -248,57 +251,225 @@
         <div class="eyebrow" data-rev><span class="mono">02 · Ask</span></div>
         <div class="head">
           <h2 data-split="words">Ask My Inbox</h2>
-          <p class="sub lede" data-rev>Search and ask questions grounded in your saved notes, URLs, and PDFs.</p>
+          <p class="sub lede" data-rev>Ask about your tasks, or anything in your saved notes, links and files.</p>
         </div>
         <form id="askForm" class="ask-form" onsubmit="askInbox(event)" data-rev>
           <label>
             Question
-            <input id="askQuestion" type="search" maxlength="500" placeholder="What did I plan about car insurance?" required />
+            <input id="askQuestion" type="search" maxlength="500" placeholder="What do I have to do today?" required />
           </label>
           <div class="ask-row">
-            <div class="ask-examples">
-              <button type="button" class="secondary chip" onclick="fillAskExample('What deadlines or renewals did I mention?')">Renewals</button>
-              <button type="button" class="secondary chip" onclick="fillAskExample('What books or articles should I read?')">Reading list</button>
-              <button type="button" class="secondary chip" onclick="fillAskExample('What restaurant recommendations do I have?')">Restaurants</button>
+            <div class="ask-examples" aria-label="Example questions">
+              <button type="button" class="secondary chip" onclick="askExample('What do I have to do today?')">Today</button>
+              <button type="button" class="secondary chip" onclick="askExample('What is overdue?')">Overdue</button>
+              <button type="button" class="secondary chip" onclick="askExample('What is coming up?')">Coming up</button>
+              <button type="button" class="secondary chip" onclick="askExample('List my tasks')">All tasks</button>
             </div>
             <button type="submit" id="askButton" class="magnetic">Ask</button>
           </div>
         </form>
         <p id="askStatus" class="status muted" role="status" aria-live="polite"></p>
         <div id="askOutput" class="panel ask-output" data-rev>
-          <span class="muted">Answers cite inbox items. If evidence is weak, Life Inbox says so instead of guessing.</span>
+          <span class="muted">Answers come only from what you saved, and list the notes they used. If there is not enough to go on, Life Inbox says so instead of guessing.</span>
         </div>
       </div>
     </section>
 
     <!-- 03 · Dashboard -->
     <section id="panel-dashboard" class="tab-panel" role="tabpanel" aria-labelledby="tab-dashboard" data-panel="dashboard" hidden>
-      <div class="wrap band">
-        <div class="eyebrow" data-rev><span class="mono">03 · Dashboard</span></div>
-        <div class="head">
-          <h2 data-split="words">Organized dashboard</h2>
-          <p id="dashboardStatus" class="status muted lede" role="status" aria-live="polite"></p>
-        </div>
-        <div id="dashboard" class="dashboard" data-rev>
-          <span class="muted">Analyze your inbox to populate topics, priorities, and related items.</span>
+      <div class="wrap band cal-dash-wrap">
+        <div class="eyebrow" data-rev><span class="mono">03 · Operations Hub</span></div>
+
+        <!-- Two Column Main Layout: Left Main Area + Right Calendar Sidebar -->
+        <div class="cal-dash-shell" data-rev>
+          
+          <!-- Left Main Area (70%) -->
+          <div class="cal-dash-main">
+            <!-- Header & Composer Zone -->
+            <div class="cal-dash-header-zone">
+              <div class="cal-brand-row">
+                <h2 class="cal-brand-title">Life Inbox</h2>
+                <span class="cal-sync-pill mono"><span class="cal-sync-dot"></span> AI Active</span>
+              </div>
+              
+              <!-- Write a note form -->
+              <form class="cal-note-composer" onsubmit="dashAddNote(event)">
+                <div class="cal-input-wrap">
+                  <span class="cal-input-icon">✍️</span>
+                  <input id="calNoteInput" type="text" placeholder="Write a note..." maxlength="1000" autocomplete="off" required />
+                </div>
+                <button id="calNoteAddBtn" type="submit" class="cal-add-btn">Add</button>
+              </form>
+
+              <!-- Search or ask bar -->
+              <form class="cal-search-composer" onsubmit="dashSearchAsk(event)">
+                <div class="cal-input-wrap">
+                  <span class="cal-input-icon">🔍</span>
+                  <input id="calSearchInput" type="search" placeholder="Search or ask your notes..." maxlength="500" autocomplete="off" required />
+                </div>
+                <button id="calSearchBtn" type="submit" class="cal-search-btn">Ask ↵</button>
+              </form>
+
+              <!-- Search/Ask Result Drawer -->
+              <div id="calAskDrawer" class="cal-ask-drawer" hidden>
+                <div class="cal-ask-head">
+                  <span class="mono">Grounded Answer</span>
+                  <button type="button" class="cal-close-btn" onclick="closeCalAskDrawer()">×</button>
+                </div>
+                <div id="calAskContent" class="cal-ask-body"></div>
+              </div>
+            </div>
+
+            <!-- Status message -->
+            <p id="dashboardStatus" class="status muted" role="status" aria-live="polite"></p>
+
+            <!-- 2x2 Core Cards Grid: Due Today, Overdue, Coming Up, Pinned -->
+            <div class="cal-cards-grid-2x2">
+              
+              <!-- 1. Due Today -->
+              <div class="cal-box cal-box-today">
+                <div class="cal-box-header">
+                  <div class="cal-box-title-group">
+                    <span class="cal-indicator-dot indigo"></span>
+                    <h3>Due today <span id="todayCountBadge" class="cal-count-pill mono">(3)</span></h3>
+                  </div>
+                </div>
+                <div class="cal-box-body">
+                  <ul id="dueTodayList" class="cal-task-checklist">
+                    <!-- Populated dynamically -->
+                  </ul>
+                </div>
+              </div>
+
+              <!-- 2. Overdue -->
+              <div class="cal-box cal-box-overdue">
+                <div class="cal-box-header">
+                  <div class="cal-box-title-group">
+                    <span class="cal-indicator-dot rose"></span>
+                    <h3>Overdue <span id="overdueCountBadge" class="cal-count-pill rose mono">(2)</span></h3>
+                  </div>
+                </div>
+                <div class="cal-box-body">
+                  <ul id="overdueList" class="cal-task-checklist">
+                    <!-- Populated dynamically -->
+                  </ul>
+                </div>
+              </div>
+
+              <!-- 3. Coming up -->
+              <div class="cal-box cal-box-upcoming">
+                <div class="cal-box-header">
+                  <div class="cal-box-title-group">
+                    <span class="cal-indicator-dot violet"></span>
+                    <h3>Coming up</h3>
+                  </div>
+                </div>
+                <div class="cal-box-body">
+                  <ul id="upcomingList" class="cal-upcoming-list">
+                    <!-- Populated dynamically -->
+                  </ul>
+                </div>
+              </div>
+
+              <!-- 4. Pinned -->
+              <div class="cal-box cal-box-pinned">
+                <div class="cal-box-header">
+                  <div class="cal-box-title-group">
+                    <span class="cal-star-icon">★</span>
+                    <h3>Pinned</h3>
+                  </div>
+                  <button type="button" class="cal-pin-add-btn" onclick="promptAddPin()" title="Pin a thought">+</button>
+                </div>
+                <div class="cal-box-body">
+                  <ul id="pinnedList" class="cal-pinned-list">
+                    <!-- Populated dynamically -->
+                  </ul>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Full-Width Bottom Section: Latest notes -->
+            <div class="cal-latest-notes-box">
+              <div class="cal-latest-head">
+                <div class="cal-latest-title">
+                  <span class="cal-bullet-main">•</span>
+                  <h3>Latest notes</h3>
+                </div>
+                <button type="button" class="cal-see-all-btn mono" data-goto="notes">[See all]</button>
+              </div>
+              <ul id="latestNotesList" class="cal-notes-stream">
+                <!-- Populated dynamically -->
+              </ul>
+            </div>
+
+            <!-- Hidden container for loadDashboard compatibility if needed -->
+            <div id="dashboard" hidden></div>
+          </div>
+
+          <!-- Right Calendar Sidebar (30%) -->
+          <aside class="cal-sidebar" aria-label="Calendar and Day Agenda">
+            <!-- Top calendar bar (Home removed) -->
+            <div class="cal-top-bar">
+              <div class="cal-title-pill">
+                <span class="cal-title-dot" aria-hidden="true"></span>
+                <span class="mono">Calendar</span>
+              </div>
+              <button type="button" class="cal-today-pill mono" onclick="jumpToToday()" title="Jump to today">
+                <span class="cal-today-pill-dot"></span>Today
+              </button>
+            </div>
+
+            <!-- Month Header with navigation -->
+            <div class="cal-month-nav">
+              <button type="button" class="cal-month-arrow" onclick="navMonth(-1)" aria-label="Previous month" title="Previous month">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+              </button>
+              <h3 id="calMonthTitle" class="cal-month-name">November 2026</h3>
+              <button type="button" class="cal-month-arrow" onclick="navMonth(1)" aria-label="Next month" title="Next month">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              </button>
+            </div>
+
+            <!-- Weekday Row: M T W T F S S -->
+            <div class="cal-weekdays-row mono">
+              <span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span>
+            </div>
+
+            <!-- Month Days Grid -->
+            <div id="calDaysGrid" class="cal-days-grid mono">
+              <!-- Dynamically populated days with sleek interactive cells and count badges -->
+            </div>
+
+            <!-- Divider Line -->
+            <div class="cal-sidebar-divider"></div>
+
+            <!-- Selected Day Agenda / Focus -->
+            <div class="cal-day-agenda">
+              <div class="cal-agenda-head">
+                <div class="cal-day-heading-wrap">
+                  <span id="calSelectedDayTitle" class="cal-day-heading">Thu 12</span>
+                  <span id="calTodayTag" class="cal-today-tag mono">TODAY</span>
+                </div>
+                <span id="calSelectedDayPending" class="cal-day-pending mono">3 pending</span>
+              </div>
+              <ul id="calSelectedDayList" class="cal-agenda-checklist">
+                <!-- Checkable tasks for selected day -->
+              </ul>
+              <form class="cal-agenda-quick-add" onsubmit="addAgendaItem(event)">
+                <input id="calAgendaInput" type="text" placeholder="+ Add task for this date..." maxlength="200" autocomplete="off" />
+              </form>
+            </div>
+          </aside>
+
         </div>
       </div>
 
-      <div class="wrap band band-follow">
-        <div class="eyebrow" data-rev><span class="mono">Spaces</span></div>
-        <div class="head">
-          <h2 data-split="words">Topics / spaces</h2>
-          <form id="topicForm" class="topic-form" onsubmit="createTopic(event)" data-rev>
-            <label>
-              New topic
-              <input id="topicName" maxlength="80" placeholder="e.g. Home projects" required />
-            </label>
-            <button type="submit">Add topic</button>
-          </form>
-        </div>
-        <p id="topicStatus" class="status muted" role="status" aria-live="polite"></p>
-        <div id="topics" data-rev></div>
-      </div>
+      <!-- Hidden compatibility stubs for background topic/dashboard sync -->
+      <p id="dashboardSummary" hidden></p>
+      <div id="dashboard" hidden></div>
+      <div id="topics" hidden></div>
+      <form id="topicForm" hidden><input id="topicName" /><p id="topicStatus"></p></form>
     </section>
 
     <!-- 04 · Notes -->
@@ -306,12 +477,13 @@
       <div class="wrap band">
         <div class="eyebrow" data-rev><span class="mono">04 · Notes</span></div>
         <div class="head">
-          <h2 data-split="words">Raw saved notes</h2>
+          <h2 data-split="words">Notes</h2>
+          <p id="notesSummary" class="sub lede" data-rev>Everything you have captured, newest first.</p>
         </div>
         <form id="itemSearchForm" class="search-toolbar" onsubmit="applyItemFilters(event)" data-rev>
           <label class="search-field">
             Search
-            <input id="itemSearch" type="search" maxlength="200" placeholder="Text or title" />
+            <input id="itemSearch" type="search" maxlength="200" placeholder="Search your notes" />
           </label>
           <label>
             Type
@@ -325,7 +497,7 @@
             </select>
           </label>
           <label>
-            Category
+            Topic
             <select id="categoryFilter">
               <option value="">All</option>
             </select>
@@ -340,7 +512,7 @@
             </select>
           </label>
           <label>
-            Processing
+            Status
             <select id="processingStatusFilter">
               <option value="">All</option>
               <option value="ready">Ready</option>
@@ -348,16 +520,414 @@
               <option value="failed">Failed</option>
             </select>
           </label>
-          <div class="search-actions">
-            <button type="submit">Search</button>
-            <button type="button" class="secondary" onclick="clearItemFilters()">Clear</button>
+          <div class="search-actions" hidden>
+            <button type="button" id="clearFiltersButton" class="secondary" onclick="clearItemFilters()">Clear filters</button>
           </div>
         </form>
         <p id="searchStatus" class="status muted" role="status" aria-live="polite"></p>
+        <p id="notesStatus" class="status muted" role="status" aria-live="polite"></p>
         <div id="notes" class="card-list"></div>
       </div>
     </section>
+
+    <!-- 05 · Entities Treemap -->
+    <section id="panel-entities" class="tab-panel" role="tabpanel" aria-labelledby="tab-entities" data-panel="entities" hidden>
+      <div class="wrap band">
+        <div class="eyebrow" data-rev><span class="mono">05 · Knowledge Treemap</span></div>
+        <div class="head">
+          <h2 data-split="words">People, Places & Organizations Treemap</h2>
+          <p class="sub lede" data-rev>Interactive proportional treemap scaling entities by note frequency. Click any block to view its connected notes & dossier.</p>
+        </div>
+        <!-- Interactive Controls Bar: Type Filters & Extract Action -->
+        <div class="feature-bar" style="display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:12px;">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span class="mono eyebrow-sm" style="color:var(--text-3)">Type:</span>
+            <button type="button" class="chip active entity-type-chip" onclick="filterEntitiesByType('')">All</button>
+            <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('person')">👤 People</button>
+            <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('place')">📍 Places</button>
+            <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('organization')">🏢 Organizations</button>
+          </div>
+          <button type="button" class="secondary" style="margin-left:auto" onclick="scanAllNotesForEntities()">⚡ Extract Entities</button>
+        </div>
+
+        <!-- Interactive Timeline Scrubber & Dual Range Bar -->
+        <div class="timeline-scrubber-card">
+          <div class="timeline-header">
+            <div class="timeline-label-group">
+              <span class="mono eyebrow-sm" style="color:var(--text-3); display:inline-flex; align-items:center; gap:6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                Timeline Window:
+              </span>
+              <span id="timelineRangeDisplay" class="timeline-range-badge mono">All Time (Nov 2025 – Nov 2026)</span>
+            </div>
+            <div class="timeline-quick-pills">
+              <button type="button" class="chip active entity-time-chip" onclick="setTimelinePreset('all')">All Time</button>
+              <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('sep2026')">Sep 2026 (Jaipur Trip)</button>
+              <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('30d')">Past 30 Days</button>
+              <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('90d')">Past 90 Days</button>
+              <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('thisyear')">Year 2026</button>
+            </div>
+          </div>
+
+          <!-- Dual Date Range Slider and Direct Date Selectors -->
+          <div class="timeline-controls-row">
+            <div class="timeline-slider-wrap">
+              <div class="timeline-slider-track">
+                <div class="timeline-track-bg"></div>
+                <div id="timelineSliderHighlight" class="timeline-slider-highlight"></div>
+                <input type="range" id="timelineSliderStart" min="0" max="12" value="0" step="1" aria-label="Start Month" oninput="onTimelineSliderChange()">
+                <input type="range" id="timelineSliderEnd" min="0" max="12" value="12" step="1" aria-label="End Month" oninput="onTimelineSliderChange()">
+              </div>
+              <div class="timeline-ticks">
+                <span>Nov '25</span>
+                <span>Jan '26</span>
+                <span>Mar '26</span>
+                <span>May '26</span>
+                <span>Jul '26</span>
+                <span>Sep '26</span>
+                <span>Nov '26</span>
+              </div>
+            </div>
+
+            <div class="timeline-dates-wrap">
+              <label class="timeline-date-field">
+                <span class="mono eyebrow-xs">Start Date</span>
+                <input type="date" id="timelineDateFrom" value="2025-11-01" min="2025-11-01" max="2026-11-12" onchange="onTimelineDateInputChange()">
+              </label>
+              <span class="timeline-sep">&rarr;</span>
+              <label class="timeline-date-field">
+                <span class="mono eyebrow-xs">End Date</span>
+                <input type="date" id="timelineDateTo" value="2026-11-12" min="2025-11-01" max="2026-11-12" onchange="onTimelineDateInputChange()">
+              </label>
+              <button type="button" class="secondary icon-btn" onclick="setTimelinePreset('all')" title="Reset to All Time">&times;</button>
+            </div>
+          </div>
+        </div>
+        <p id="entitiesStatus" class="status muted" role="status" aria-live="polite"></p>
+
+        <!-- Interactive Entity Treemap -->
+        <div class="treemap-wrapper">
+          <div class="treemap-legend">
+            <span class="legend-pill person">👤 People</span>
+            <span class="legend-pill place">📍 Places</span>
+            <span class="legend-pill organization">🏢 Organizations</span>
+            <span class="legend-hint">Block area proportional to note mentions in selected window · Click any tile to inspect</span>
+          </div>
+          <div id="entityTreemap" class="entity-treemap-container" role="region" aria-label="Entities Treemap"></div>
+        </div>
+
+        <!-- Entity Dossier Modal / View -->
+        <div id="entityDossier" class="dossier-panel" hidden>
+          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+            <div>
+              <h3 id="dossierTitle" style="font-size:1.35rem; font-weight:600; color:var(--text);"></h3>
+              <div style="display:flex; align-items:center; gap:8px; margin-top:4px;">
+                <div id="dossierType"></div>
+                <div id="dossierTimelineNotice" class="dossier-timeline-notice mono"></div>
+              </div>
+            </div>
+            <button type="button" class="secondary icon-btn" onclick="closeDossier()" title="Close">&times;</button>
+          </div>
+
+          <!-- AI Profile & Timeline Summary Card -->
+          <div class="dossier-ai-card">
+            <div class="dossier-ai-head">
+              <span class="mono eyebrow-sm" style="color:var(--indigo-text); display:flex; align-items:center; gap:6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                AI Profile & Timeline Synthesis
+              </span>
+              <button type="button" class="secondary" id="refreshSummaryBtn" onclick="refreshDossierSummary()" style="font-size:11px; padding:2px 8px;">✨ Refresh Summary</button>
+            </div>
+            <div id="dossierSummaryText" class="dossier-summary-body">
+              Synthesizing profile summary from connected notes…
+            </div>
+          </div>
+
+          <div class="mono" style="font-size:12px; color:var(--muted); margin-top:16px;">Connected Notes in Selected Timeframe:</div>
+          <div id="dossierItems" class="dossier-items-list"></div>
+        </div>
+
+        <!-- Entity Cards Grid -->
+        <div id="entitiesList" class="entity-grid" style="margin-top:24px;"></div>
+      </div>
+    </section>
+
+    <!-- 06 · Smart Cards & Expense Tracker -->
+    <section id="panel-cards" class="tab-panel" role="tabpanel" aria-labelledby="tab-cards" data-panel="cards" hidden>
+      <div class="wrap band">
+        <div class="eyebrow" data-rev><span class="mono">06 · Smart Templates</span></div>
+        <div class="head">
+          <h2 data-split="words">Structured Cards & Expenses</h2>
+          <p class="sub lede" data-rev>Typed cards for recipes, books, contacts, and an automated expense tracker for receipts.</p>
+        </div>
+
+        <!-- Expense Tracker Hero Summary -->
+        <div class="expense-hero-card">
+          <div class="expense-metric">
+            <span class="mono eyebrow-sm" style="color:var(--text-3)">Total Tracked Expenses</span>
+            <div id="expenseTotalAmount" class="expense-amount">₹0.00</div>
+            <div id="expenseMonthLabel" class="muted" style="font-size:13px; margin-top:2px;">All-time receipts</div>
+            <button type="button" class="secondary" style="font-size:12px; padding:4px 10px; margin-top:8px; display:inline-flex; align-items:center; gap:6px;" onclick="exportExpensesToCsv()">
+              <span>📥</span> Export Expense CSV
+            </button>
+          </div>
+          <div style="flex:2 1 300px;">
+            <div class="mono" style="font-size:11px; color:var(--muted); margin-bottom:6px; text-transform:uppercase;">Click a category to filter receipts:</div>
+            <div id="expenseCategoryBreakdown" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;"></div>
+          </div>
+        </div>
+
+        <!-- Smart Cards Toolbar -->
+        <div class="cards-toolbar">
+          <div class="cards-search-wrap">
+            <input type="search" id="cardsSearchInput" class="cards-search-input" placeholder="🔍 Search cards by vendor, ingredient, book, contact, title…" oninput="onCardsSearchInput(this.value)">
+          </div>
+          <div class="cards-sort-wrap">
+            <label for="cardsSortSelect" class="cards-sort-label">Sort:</label>
+            <select id="cardsSortSelect" class="cards-sort-select" onchange="onCardsSortChange(this.value)">
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="amount-high">Amount: High → Low</option>
+              <option value="amount-low">Amount: Low → High</option>
+              <option value="alpha">Alphabetical (A–Z)</option>
+            </select>
+          </div>
+          <button type="button" class="secondary" onclick="openNewCardModal()">+ New Smart Card</button>
+        </div>
+
+        <div class="feature-bar">
+          <button type="button" class="chip active" id="chip-cards-all" onclick="filterCardsByKind('')">All <span id="count-cards-all" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-receipt" onclick="filterCardsByKind('receipt')">🧾 Receipts & Bills <span id="count-cards-receipt" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-recipe" onclick="filterCardsByKind('recipe')">🍳 Recipes <span id="count-cards-recipe" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-book" onclick="filterCardsByKind('book')">📚 Books <span id="count-cards-book" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-contact" onclick="filterCardsByKind('contact')">📇 Contacts <span id="count-cards-contact" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-event" onclick="filterCardsByKind('event')">📅 Events <span id="count-cards-event" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="secondary" style="margin-left:auto" onclick="convertAllNotesToCards()">✨ Auto-Format Notes into Cards</button>
+        </div>
+        <p id="cardsStatus" class="status muted" role="status" aria-live="polite"></p>
+
+        <div id="cardsList" class="smart-cards-grid"></div>
+      </div>
+    </section>
+
+    <!-- 07 · API & MCP Connector -->
+    <section id="panel-developer" class="tab-panel" role="tabpanel" aria-labelledby="tab-developer" data-panel="developer" hidden>
+      <div class="wrap band">
+        <div class="eyebrow" data-rev><span class="mono">07 · Developer & Integrations</span></div>
+        <div class="head">
+          <h2 data-split="words">Public API, Webhooks & MCP Server</h2>
+          <p class="sub lede" data-rev>Connect external AI agents (Claude Desktop, Cursor, Gemini) and automate inbox workflows.</p>
+        </div>
+
+        <div class="dev-grid">
+          <!-- API Tokens Card -->
+          <div class="dev-card">
+            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">🔑 API Bearer Tokens</h3>
+            <p class="muted" style="font-size:13.5px; margin-bottom:16px;">Generate scoped Bearer tokens (<code>li_...</code>) for scripts and external apps.</p>
+            <form onsubmit="createApiToken(event)" style="display:flex; gap:8px; margin-bottom:14px;">
+              <input id="tokenNameInput" placeholder="Token name (e.g. My Script)" required style="flex:1" />
+              <button type="submit">Generate</button>
+            </form>
+            <div id="newTokenDisplay" class="code-block" hidden></div>
+            <div id="tokensList" style="display:flex; flex-direction:column; gap:8px; margin-top:12px;"></div>
+          </div>
+
+          <!-- MCP Server Connector Card -->
+          <div class="dev-card">
+            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">🤖 Model Context Protocol (MCP)</h3>
+            <p class="muted" style="font-size:13.5px;">Add this configuration to Claude Desktop (<code>claude_desktop_config.json</code>) or Cursor to let AI agents query your inbox directly.</p>
+            <div class="code-block" style="position:relative;">
+              <button type="button" class="secondary copy-pill" onclick="copyMcpConfig()">Copy</button>
+              <pre id="mcpConfigSnippet" style="margin:0; font-family:var(--mono);">{
+  "mcpServers": {
+    "life-inbox": {
+      "command": "python",
+      "args": ["-m", "mcp_server.server"],
+      "env": {
+        "DATABASE_URL": "sqlite:////Users/ishaanwadhwa/Projects/Life-Inbox/data/life_inbox.db",
+        "LIFE_INBOX_API_TOKEN": "li_YOUR_TOKEN_HERE"
+      }
+    }
+  }
+}</pre>
+            </div>
+            <div class="muted" style="font-size:12px;">Supports: <code>search_inbox</code>, <code>add_inbox_item</code>, <code>list_inbox_items</code>.</div>
+          </div>
+
+          <!-- Webhooks Card -->
+          <div class="dev-card">
+            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">⚡ Outbound Webhooks</h3>
+            <p class="muted" style="font-size:13.5px; margin-bottom:14px;">Receive real-time HTTP POST notifications when new notes or media are captured.</p>
+            <form onsubmit="createWebhook(event)" style="display:flex; gap:8px; margin-bottom:14px;">
+              <input id="webhookUrlInput" type="url" placeholder="https://example.com/webhook" required style="flex:1" />
+              <button type="submit">Add Webhook</button>
+            </form>
+            <div id="webhooksList" style="display:flex; flex-direction:column; gap:8px;"></div>
+          </div>
+
+          <!-- Privacy & AI Call Audit Log -->
+          <div class="dev-card">
+            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">🔒 Privacy & AI Call Audit Log</h3>
+            <p class="muted" style="font-size:13.5px; margin-bottom:12px;">All outgoing prompts have PII (phones, cards, emails, Aadhaar/PAN) masked. Verify recent calls below:</p>
+            <div id="aiCallLogList" style="display:flex; flex-direction:column; gap:8px; max-height:260px; overflow-y:auto;"></div>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
+
+  <!-- Modal: Create New Smart Card -->
+  <div id="newCardModal" class="tour-modal-backdrop" hidden>
+    <div class="tour-modal app-form-modal">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <div>
+          <h3 style="font-size:1.3rem; color:var(--text);">✨ Create Smart Card</h3>
+          <p class="muted" style="font-size:13px; margin-top:2px;">Add a new typed card with structured fields.</p>
+        </div>
+        <button type="button" class="secondary icon-btn" onclick="closeNewCardModal()" title="Close">&times;</button>
+      </div>
+
+      <form id="newCardForm" onsubmit="submitNewSmartCard(event)" style="display:flex; flex-direction:column; gap:14px;">
+        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+          <label style="flex:1 1 180px;">
+            Card Type
+            <select id="newCardKindSelect" onchange="onNewCardKindChange(this.value)" style="width:100%; margin-top:4px;">
+              <option value="receipt">🧾 Receipt / Bill</option>
+              <option value="recipe">🍳 Recipe</option>
+              <option value="contact">📇 Contact</option>
+              <option value="book">📚 Book</option>
+              <option value="event">📅 Event</option>
+            </select>
+          </label>
+          <label style="flex:2 1 240px;">
+            Title / Name
+            <input type="text" id="newCardTitleInput" required placeholder="e.g. Apollo Pharmacy, Paneer Tikka, Dr. Mehta..." style="width:100%; margin-top:4px;">
+          </label>
+        </div>
+
+        <!-- Dynamic Fields Container -->
+        <div id="newCardDynamicFields" style="display:flex; flex-direction:column; gap:12px;"></div>
+
+        <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:12px;">
+          <button type="button" class="secondary" onclick="closeNewCardModal()">Cancel</button>
+          <button type="submit" class="primary">Save Smart Card</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Recipe Cook Mode -->
+  <div id="recipeCookModal" class="tour-modal-backdrop" hidden>
+    <div class="tour-modal recipe-cook-modal">
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line); padding-bottom:14px; margin-bottom:16px;">
+        <div>
+          <div class="feature-badge recipe" style="display:inline-block; margin-bottom:4px;">🍳 COOK MODE</div>
+          <h2 id="cookRecipeTitle" style="font-size:1.45rem; color:var(--text); margin:0;">Recipe Title</h2>
+          <div id="cookRecipeMeta" class="muted mono" style="font-size:12.5px; margin-top:4px;">Prep: 30 mins · 4 servings</div>
+        </div>
+        <button type="button" class="secondary icon-btn" onclick="closeRecipeCookMode()" title="Exit Cook Mode">&times;</button>
+      </div>
+
+      <!-- Kitchen Timer Widget -->
+      <div class="cook-timer-widget">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:1.4rem;">⏱️</span>
+          <div>
+            <div class="mono" style="font-size:11px; color:var(--indigo-text); text-transform:uppercase;">Kitchen Timer</div>
+            <div id="cookTimerDisplay" class="mono" style="font-size:1.8rem; font-weight:700; color:var(--text);">00:00</div>
+          </div>
+        </div>
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+          <button type="button" class="chip" onclick="setCookTimer(180)">3 min</button>
+          <button type="button" class="chip" onclick="setCookTimer(300)">5 min</button>
+          <button type="button" class="chip" onclick="setCookTimer(900)">15 min</button>
+          <button type="button" class="chip" onclick="setCookTimer(1800)">30 min</button>
+          <button type="button" id="cookTimerToggleBtn" class="secondary" onclick="toggleCookTimer()">Start</button>
+          <button type="button" class="secondary" onclick="resetCookTimer()">Reset</button>
+        </div>
+      </div>
+
+      <div class="cook-grid">
+        <!-- Ingredients Checklist -->
+        <div class="cook-col">
+          <h4 style="font-size:13px; text-transform:uppercase; color:var(--muted); margin-bottom:10px;">Ingredients Checklist</h4>
+          <div id="cookIngredientsList" class="cook-checklist"></div>
+        </div>
+        <!-- Steps / Method -->
+        <div class="cook-col">
+          <h4 style="font-size:13px; text-transform:uppercase; color:var(--muted); margin-bottom:10px;">Cooking Instructions</h4>
+          <div id="cookStepsList" class="cook-steps"></div>
+        </div>
+      </div>
+
+      <div style="text-align:right; margin-top:20px;">
+        <button type="button" class="magnetic" onclick="closeRecipeCookMode()">Done Cooking</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating Onboarding Tour & Feature Discovery -->
+  <button type="button" id="tourFab" class="tour-floater-btn" onclick="openOnboardingTour()">
+    <span>✨</span> Explore Features & Tour
+  </button>
+
+  <div id="tourModal" class="tour-modal-backdrop" hidden>
+    <div class="tour-modal">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <h3 style="font-size:1.35rem; color:var(--text);">✨ Life Inbox Feature Guide</h3>
+          <p class="muted" style="font-size:13.5px; margin-top:2px;">Discover what your intelligent second-brain copilot can do:</p>
+        </div>
+        <button type="button" class="secondary icon-btn" onclick="closeOnboardingTour()" title="Close">&times;</button>
+      </div>
+
+      <div class="tour-card-list">
+        <div class="tour-item">
+          <div class="tour-item-info">
+            <strong>🍳 Smart Cards & Receipts</strong>
+            <span>Turns unstructured notes into typed recipe, book, contact cards, and tracks monthly expenses from bills.</span>
+          </div>
+          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-cards').click()">View Cards</button>
+        </div>
+
+        <div class="tour-item">
+          <div class="tour-item-info">
+            <strong>👤 People & Entities Treemap</strong>
+            <span>Visual treemap scaling entities by note frequency. Click any block to view its connected notes & dossier.</span>
+          </div>
+          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-entities').click()">View Treemap</button>
+        </div>
+
+        <div class="tour-item">
+          <div class="tour-item-info">
+            <strong>🧠 Meaning-Based Semantic Search</strong>
+            <span>Search with completely different words (e.g. "teeth checkup" finds dentist notes) via local embeddings.</span>
+          </div>
+          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-ask').click()">Try Ask</button>
+        </div>
+
+        <div class="tour-item">
+          <div class="tour-item-info">
+            <strong>🔒 Privacy Shield & Redaction</strong>
+            <span>Automatically redacts phone numbers, card numbers, and PII before sending prompts to external AI.</span>
+          </div>
+          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-developer').click()">Audit Log</button>
+        </div>
+
+        <div class="tour-item">
+          <div class="tour-item-info">
+            <strong>🤖 MCP Server & Public API</strong>
+            <span>Connect Claude Desktop, Cursor, or custom automations directly into your personal inbox.</span>
+          </div>
+          <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-developer').click()">Get MCP Config</button>
+        </div>
+      </div>
+
+      <div style="text-align:right;">
+        <button type="button" class="magnetic" onclick="closeOnboardingTour()">Got it, let's explore!</button>
+      </div>
+    </div>
+  </div>
 
   <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
 

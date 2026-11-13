@@ -69,6 +69,30 @@ class InboxItem(BaseModel):
     owner_user_id: Optional[int] = None
     created_at: str
     updated_at: Optional[str]
+    is_sensitive: bool = False
+    kind: Optional[str] = None
+    kind_fields: Optional[dict] = None
+
+
+class SensitiveUpdate(BaseModel):
+    sensitive: bool
+
+
+class ApiTokenCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class WebhookCreate(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+    event: str = "item.created"
+
+
+class FlashcardReview(BaseModel):
+    remembered: bool
+
+
+class RedactPreviewRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
 
 
 class UrlItemCreate(BaseModel):
@@ -297,6 +321,7 @@ class SearchHit(BaseModel):
     score: float
     keyword_score: float
     semantic_score: float
+    meaning_score: float = 0.0
 
 
 class AskRequest(BaseModel):
@@ -324,3 +349,15 @@ class AskResponse(BaseModel):
     mode: Literal["llm_grounded", "extractive_fallback", "task_board"] = (
         "extractive_fallback"
     )
+
+
+class SmartCardUpdate(BaseModel):
+    kind: str
+    fields: dict = {}
+
+
+class SmartCardCreate(BaseModel):
+    kind: str
+    title: Optional[str] = None
+    fields: dict = {}
+
