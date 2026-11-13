@@ -65,7 +65,7 @@ def test_login_errors_are_shown_and_escaped(client):
 
 
 def test_main_page_loads_the_shared_ribbon_before_ui(client):
-    page = (importlib.import_module("app.main").APP_DIR / "templates" / "index.html").read_text()
+    page = (importlib.import_module("app.main").APP_DIR / "templates" / "index.html").read_text(encoding="utf-8")
     assert page.index("/static/ribbon.js") < page.index("/static/ui.js")
     assert client.get("/static/ribbon.js").status_code == 200
     assert "window.LifeInboxRibbon" in client.get("/static/ribbon.js").text

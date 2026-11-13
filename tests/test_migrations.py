@@ -57,6 +57,9 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
             "owner_user_id",
             "created_at",
             "updated_at",
+            "is_sensitive",
+            "kind",
+            "kind_fields",
         }
         assert columns["updated_at"]["nullable"] is True
         assert {

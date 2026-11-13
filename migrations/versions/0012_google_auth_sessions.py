@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 
 revision: str = "0012_google_auth_sessions"
-down_revision: Optional[str] = "0011_multi_user_ownership"
+down_revision: Optional[str] = "0017_api_tokens_webhooks"
 branch_labels: Optional[Union[str, Sequence[str]]] = None
 depends_on: Optional[Union[str, Sequence[str]]] = None
 

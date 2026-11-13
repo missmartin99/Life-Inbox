@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Voice assistant · Life Inbox</title>
+  <style>
+    :root { --bg:#f7f8fa; --card:#fff; --text:#111; --muted:#5b6470; --accent:#2f6f84; --rec:#c62828; --border:#e3e6ea; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#14171a; --card:#1d2125; --text:#f2f4f6; --muted:#a3acb7; --accent:#4a9bb5; --rec:#ef5350; --border:#2d3339; }
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; min-height:100vh; background:var(--bg); color:var(--text);
+           font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; padding:16px; }
+    main { max-width:560px; margin:0 auto; text-align:center; }
+    h1 { margin:24px 0 4px; font-size:26px; }
+    .sub { color:var(--muted); margin:0 0 28px; }
+    #mic { width:132px; height:132px; border-radius:50%; border:none; cursor:pointer;
+           background:var(--accent); color:#fff; font-size:15px; font-weight:600; }
+    #mic.recording { background:var(--rec); animation:pulse 1.2s infinite; }
+    #mic:disabled { opacity:.6; cursor:default; }
+    @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(198,40,40,.5)} 100%{box-shadow:0 0 0 26px rgba(198,40,40,0)} }
+    #status { min-height:1.4em; margin:16px 0; color:var(--muted); }
+    .bubble { text-align:left; background:var(--card); border:1px solid var(--border);
+              border-radius:14px; padding:14px 16px; margin:12px 0; line-height:1.5; }
+    .bubble small { display:block; color:var(--muted); margin-bottom:4px; font-weight:600; }
+    .hidden { display:none; }
+    ul { margin:8px 0 0; padding-left:18px; color:var(--muted); font-size:14px; }
+    form { display:flex; gap:8px; margin-top:24px; }
+    input[type=text] { flex:1; padding:12px; border-radius:10px; border:1px solid var(--border);
+                       background:var(--card); color:var(--text); font-size:16px; }
+    button.small { padding:12px 16px; border-radius:10px; border:none; background:var(--accent);
+                   color:#fff; font-weight:600; cursor:pointer; }
+    button.link { background:none; border:none; color:var(--accent); cursor:pointer; font-size:14px; margin-top:6px; }
+    a { color:var(--accent); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Life Inbox</h1>
+  <p class="sub">Tap the mic and ask, or say “remember to …”.</p>
+
+  <button id="mic" type="button" aria-label="Start recording">Tap to talk</button>
+  <div id="status" role="status" aria-live="polite"></div>
+
+  <div id="heard" class="bubble hidden"><small>You said</small><span></span></div>
+  <div id="reply" class="bubble hidden">
+    <small>Life Inbox</small><span></span>
+    <ul id="sources"></ul>
+    <button id="replay" class="link hidden" type="button">Play again</button>
+  </div>
+
+  <form id="typed">
+    <input id="typedText" type="text" placeholder="Or type here" autocomplete="off" maxlength="500">
+    <button class="small" type="submit">Send</button>
+  </form>
+  <p class="sub" style="margin-top:20px"><a href="/">Back to inbox</a></p>
+</main>
+
+<script>
+(function () {
+  const VOICE_REPLIES = __VOICE_REPLIES__;
+  const mic = document.getElementById("mic");
+  const statusEl = document.getElementById("status");
+  const heard = document.getElementById("heard");
+  const reply = document.getElementById("reply");
+  const sources = document.getElementById("sources");
+  const replay = document.getElementById("replay");
+  const typed = document.getElementById("typed");
+  const typedText = document.getElementById("typedText");
+  const player = new Audio();
+  const SILENT = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+  const MAX_RECORD_MS = 30000;
+
+  let recorder = null, stream = null, chunks = [], stopTimer = null, lastSpeech = "";
+
+  function setStatus(text) { statusEl.textContent = text || ""; }
+  function busy(on) { mic.disabled = on; typedText.disabled = on; }
+  function show(el, label) { el.classList.remove("hidden"); el.querySelector("span").textContent = label; }
+
+  function pickMime() {
+    const options = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+    return options.find(function (t) { return window.MediaRecorder && MediaRecorder.isTypeSupported(t); }) || "";
+  }
+  function extFor(mime) {
+    if (mime.indexOf("mp4") >= 0) return "m4a";
+    if (mime.indexOf("ogg") >= 0) return "ogg";
+    return "webm";
+  }
+
+  async function startRecording() {
+    // Unlock audio playback now: browsers only allow it after a tap.
+    player.src = SILENT; player.play().catch(function () {});
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      setStatus("Microphone blocked. Allow it in your browser, or type below.");
+      return;
+    }
+    const mime = pickMime();
+    recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    chunks = [];
+    recorder.ondataavailable = function (ev) { if (ev.data && ev.data.size) chunks.push(ev.data); };
+    recorder.onstop = function () {
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      const type = recorder.mimeType || mime || "audio/webm";
+      const blob = new Blob(chunks, { type: type });
+      recorder = null;
+      if (blob.size < 1200) { setStatus("That was too short. Tap and try again."); return; }
+      const form = new FormData();
+      form.append("file", blob, "voice." + extFor(type));
+      send(form);
+    };
+    recorder.start();
+    mic.classList.add("recording"); mic.textContent = "Tap to stop";
+    setStatus("Listening…");
+    stopTimer = setTimeout(stopRecording, MAX_RECORD_MS);
+  }
+
+  function stopRecording() {
+    clearTimeout(stopTimer);
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    mic.classList.remove("recording"); mic.textContent = "Tap to talk";
+  }
+
+  mic.addEventListener("click", function () {
+    if (recorder) stopRecording(); else startRecording();
+  });
+
+  typed.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    const value = typedText.value.trim();
+    if (!value) return;
+    player.src = SILENT; player.play().catch(function () {});
+    const form = new FormData();
+    form.append("text", value);
+    typedText.value = "";
+    send(form);
+  });
+
+  async function send(form) {
+    busy(true); setStatus("Thinking…");
+    try {
+      const res = await fetch("/api/assistant/voice", { method: "POST", body: form });
+      if (res.status === 401) {
+        setStatus("");
+        show(reply, "Please sign in first.");
+        sources.innerHTML = "";
+        const link = document.createElement("a"); link.href = "/login"; link.textContent = "Go to sign in";
+        sources.appendChild(link);
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) { setStatus(data.detail || "Something went wrong. Please try again."); return; }
+      show(heard, data.transcript);
+      show(reply, data.reply);
+      sources.innerHTML = "";
+      (data.citations || []).forEach(function (c) {
+        const li = document.createElement("li");
+        li.textContent = (c.title || "Item " + c.item_id) + (c.excerpt ? " — " + c.excerpt : "");
+        sources.appendChild(li);
+      });
+      setStatus("");
+      lastSpeech = data.speech || data.reply;
+      replay.classList.remove("hidden");
+      await speak(lastSpeech);
+    } catch (e) {
+      setStatus("Could not reach the server. Check your connection.");
+    } finally {
+      busy(false);
+    }
+  }
+
+  async function speak(text) {
+    if (!text) return;
+    if (VOICE_REPLIES) {
+      try {
+        const res = await fetch("/api/assistant/speak", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: text })
+        });
+        if (res.ok) {
+          const url = URL.createObjectURL(await res.blob());
+          player.src = url;
+          player.onended = function () { URL.revokeObjectURL(url); };
+          await player.play();
+          return;
+        }
+      } catch (e) { /* fall back to the browser voice below */ }
+    }
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    }
+  }
+
+  replay.addEventListener("click", function () { speak(lastSpeech); });
+})();
+</script>
+</body>
+</html>

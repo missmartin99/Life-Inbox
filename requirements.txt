@@ -12,3 +12,5 @@ httpx
 pypdf
 Pillow
 psycopg[binary]
+fastembed
+mcp
