@@ -18,7 +18,7 @@ MODULES = (
 )
 
 DEFAULTS = {
-    "theme": "dark",
+    "theme": "light",
     "bell_badge": True,
     "bell_overdue_alert": True,
     "bell_scope": "all",
@@ -159,8 +159,8 @@ def test_unreadable_saved_settings_fall_back_to_defaults(ctx):
 def test_settings_are_per_person_and_private(ctx):
     _, a = make_user(ctx.database, "alice@example.com")
     _, b = make_user(ctx.database, "bob@example.com")
-    save(ctx, a, theme="light")
-    assert me(ctx, b)["settings"]["theme"] == "dark"
+    save(ctx, a, theme="dark")
+    assert me(ctx, b)["settings"]["theme"] == "light"
     assert save(ctx, theme="light").status_code == 401
     blocked = ctx.client.patch(
         "/api/me/settings",
@@ -168,7 +168,7 @@ def test_settings_are_per_person_and_private(ctx):
         headers={**a, "Origin": "https://evil.example"},
     )
     assert blocked.status_code == 403
-    assert me(ctx, a)["settings"]["theme"] == "light"
+    assert me(ctx, a)["settings"]["theme"] == "dark"
 
 
 # --- the bell follows the notification settings ---------------------------------

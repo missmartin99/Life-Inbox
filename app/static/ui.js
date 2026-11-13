@@ -73,9 +73,27 @@
     });
   }
 
+  function tabIndex(name) {
+    return tabs.findIndex(tab => tab.dataset.tab === name);
+  }
+
+  // Slide the incoming page in from the direction of travel.
+  function animatePanel(panel, direction) {
+    if (!panel || !direction || prefersStill()) return;
+    panel.classList.remove('page-from-below', 'page-from-above');
+    void panel.offsetWidth; // restart the animation
+    panel.classList.add(direction > 0 ? 'page-from-below' : 'page-from-above');
+    panel.addEventListener('animationend', function done(event) {
+      if (event.target !== panel) return;
+      panel.classList.remove('page-from-below', 'page-from-above');
+      panel.removeEventListener('animationend', done);
+    });
+  }
+
   function activate(name, {focus = false, updateHash = true} = {}) {
     if (!panels.has(name)) name = 'capture';
     if (name === activeTab) return;
+    const direction = activeTab === null ? 0 : Math.sign(tabIndex(name) - tabIndex(activeTab));
     activeTab = name;
 
     for (const tab of tabs) {
@@ -96,6 +114,8 @@
     for (const [key, panel] of panels) panel.hidden = key !== name;
     root.dataset.tab = name;
     moveIndicator();
+    animatePanel(panels.get(name), direction);
+    resetPagePull();
 
     if (updateHash) {
       const url = new URL(window.location.href);
@@ -477,6 +497,147 @@
     });
   }
   window.addEventListener('scroll', onScroll, {passive: true});
+
+  /* ---------- Scroll to the next / previous page ---------- */
+  // Keep scrolling past the bottom of a page to move to the next tab, or past
+  // the top to go back. A small hint fills up first, so it never happens by
+  // accident; inner scroll areas, open dialogs and menus are respected.
+  const PAGE_THRESHOLD = 260;      // px of extra scrolling needed
+  const PAGE_COOLDOWN_MS = 900;    // pause after a page change
+  const PAGE_IDLE_RESET_MS = 450;  // the hint drains if scrolling stops
+  let pagePull = 0;
+  let pageDirection = 0;
+  let pageLockedUntil = 0;
+  let pageIdleTimer = 0;
+  let lastWindowScrollAt = 0;
+
+  const pageHint = document.createElement('div');
+  pageHint.className = 'page-hint';
+  pageHint.setAttribute('aria-hidden', 'true');
+  pageHint.innerHTML = '<span class="page-hint-label"></span><span class="page-hint-bar"><span></span></span>';
+  document.body.append(pageHint);
+  const pageHintLabel = pageHint.querySelector('.page-hint-label');
+  const pageHintFill = pageHint.querySelector('.page-hint-bar > span');
+
+  function neighbourTab(direction) {
+    const index = tabIndex(activeTab);
+    return index < 0 ? null : tabs[index + direction] || null;
+  }
+
+  function tabLabel(tab) {
+    const text = tab.textContent.replace(/^\s*\d+\s*/, '').trim().toLowerCase();
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
+  function updatePageHint() {
+    const target = pageDirection && pagePull > 0 ? neighbourTab(pageDirection) : null;
+    if (!target) {
+      pageHint.classList.remove('show');
+      return;
+    }
+    pageHint.classList.toggle('up', pageDirection < 0);
+    pageHintLabel.textContent = `${pageDirection > 0 ? 'Next' : 'Back to'}: ${tabLabel(target)}`;
+    pageHintFill.style.transform = `scaleX(${Math.min(1, pagePull / PAGE_THRESHOLD)})`;
+    pageHint.classList.add('show');
+  }
+
+  function resetPagePull() {
+    pagePull = 0;
+    pageDirection = 0;
+    updatePageHint();
+  }
+
+  function pageBlocked(target) {
+    if (introPlaying || Date.now() < pageLockedUntil) return true;
+    if (document.querySelector('.tour-modal-backdrop:not([hidden]), dialog[open]')) return true;
+    if (document.querySelector('#accountPanel:not([hidden]), #bellPanel:not([hidden])')) return true;
+    return Boolean(target && target.closest && target.closest('select, input[type="range"]'));
+  }
+
+  // True when an element under the pointer can still scroll this way itself.
+  function innerCanScroll(target, direction) {
+    for (let el = target; el && el !== document.body && el !== root; el = el.parentElement) {
+      if (!(el instanceof Element)) continue;
+      if (el.scrollHeight <= el.clientHeight + 1) continue;
+      if (!/(auto|scroll)/.test(window.getComputedStyle(el).overflowY)) continue;
+      if (direction > 0 && el.scrollTop + el.clientHeight < el.scrollHeight - 1) return true;
+      if (direction < 0 && el.scrollTop > 0) return true;
+    }
+    return false;
+  }
+
+  function atPageEdge(direction) {
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    return direction > 0 ? window.scrollY >= max - 2 : window.scrollY <= 1;
+  }
+
+  function goToNeighbour(direction) {
+    const target = neighbourTab(direction);
+    resetPagePull();
+    if (!target) return;
+    pageLockedUntil = Date.now() + PAGE_COOLDOWN_MS;
+    activate(target.dataset.tab);
+    if (direction < 0) {
+      // Arriving from below: start at the bottom of the previous page.
+      window.scrollTo(0, document.documentElement.scrollHeight);
+    }
+  }
+
+  function pullPage(direction, amount, target) {
+    if (!direction || pageBlocked(target) || innerCanScroll(target, direction)
+        || !atPageEdge(direction) || !neighbourTab(direction)) {
+      if (pagePull) resetPagePull();
+      return;
+    }
+    // Ignore the tail of a scroll that only just reached the edge.
+    if (Date.now() - lastWindowScrollAt < 120) return;
+    if (direction !== pageDirection) {
+      pageDirection = direction;
+      pagePull = 0;
+    }
+    pagePull += amount;
+    window.clearTimeout(pageIdleTimer);
+    pageIdleTimer = window.setTimeout(resetPagePull, PAGE_IDLE_RESET_MS);
+    if (pagePull >= PAGE_THRESHOLD) goToNeighbour(direction);
+    else updatePageHint();
+  }
+
+  window.addEventListener('scroll', () => { lastWindowScrollAt = Date.now(); }, {passive: true});
+
+  window.addEventListener('wheel', event => {
+    if (event.ctrlKey || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
+    const amount = Math.min(Math.abs(event.deltaY) * unit, 120);
+    pullPage(Math.sign(event.deltaY), amount, event.target);
+  }, {passive: true});
+
+  // Touch: swipe up past the bottom (or down past the top).
+  let touchY = null;
+  window.addEventListener('touchstart', event => {
+    touchY = event.touches.length === 1 ? event.touches[0].clientY : null;
+  }, {passive: true});
+  window.addEventListener('touchmove', event => {
+    if (touchY === null || event.touches.length !== 1) return;
+    const y = event.touches[0].clientY;
+    const delta = touchY - y;
+    touchY = y;
+    if (Math.abs(delta) < 1) return;
+    pullPage(Math.sign(delta), Math.abs(delta) * 1.6, event.target);
+  }, {passive: true});
+  window.addEventListener('touchend', () => { touchY = null; }, {passive: true});
+
+  // Keyboard: Page Down / Space at the bottom, Page Up / Shift+Space at the top.
+  document.addEventListener('keydown', event => {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.target.closest && event.target.closest('input, textarea, select, button, [contenteditable="true"]')) return;
+    const forward = event.key === 'PageDown' || (event.key === ' ' && !event.shiftKey);
+    const back = event.key === 'PageUp' || (event.key === ' ' && event.shiftKey);
+    const direction = forward ? 1 : back ? -1 : 0;
+    if (!direction || pageBlocked(event.target) || !atPageEdge(direction)) return;
+    if (!neighbourTab(direction)) return;
+    event.preventDefault();
+    goToNeighbour(direction);
+  });
 
   /* ---------- Boot ---------- */
   const playingIntro = root.classList.contains('intro-play')

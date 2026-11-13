@@ -52,9 +52,24 @@ class AppConfig:
         )
 
     @property
+    def password_login_enabled(self) -> bool:
+        """Email + password accounts. On alongside Google sign-in too, unless
+        LIFE_INBOX_PASSWORD_LOGIN=0 (then only Google can be used)."""
+        return _truthy("LIFE_INBOX_PASSWORD_LOGIN", "1")
+
+    @property
     def local_anonymous_allowed(self) -> bool:
-        """Anonymous requests map to the Local Owner only in plain local dev."""
-        return self.environment == "local" and self.auth_mode == "dev"
+        """Anonymous requests map to the shared Local Owner account.
+
+        Off by default so every person signs in and sees only their own
+        inbox. Only plain local dev with LIFE_INBOX_LOCAL_ANONYMOUS=1 (used by
+        the automated tests) turns the shared account back on.
+        """
+        return (
+            self.environment == "local"
+            and self.auth_mode == "dev"
+            and _truthy("LIFE_INBOX_LOCAL_ANONYMOUS")
+        )
 
 
 def _truthy(name: str, default: str = "") -> bool:
@@ -81,9 +96,9 @@ def load_config(*, strict: Optional[bool] = None) -> AppConfig:
         auth_mode = "dev"
     timezone = os.getenv("LIFE_INBOX_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
     max_upload_mb = int(os.getenv("LIFE_INBOX_MAX_UPLOAD_MB", "5") or "5")
-    allow_dev_login = _truthy(
-        "LIFE_INBOX_ALLOW_DEV_LOGIN", "1" if auth_mode == "dev" else "0"
-    )
+    # Passwordless "dev login" is off unless explicitly turned on (the
+    # automated tests do); people sign in with an email and password.
+    allow_dev_login = _truthy("LIFE_INBOX_ALLOW_DEV_LOGIN", "0")
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
     google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
     public_url = (

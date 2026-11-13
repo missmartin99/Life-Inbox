@@ -12,3 +12,7 @@ import os
 
 os.environ["LIFE_INBOX_SKIP_DOTENV"] = "1"
 os.environ["LIFE_INBOX_AUTO_ANALYZE"] = "0"
+# Most API tests talk to the app without signing in; they use the shared
+# Local Owner account, which the real app keeps off by default.
+os.environ.setdefault("LIFE_INBOX_LOCAL_ANONYMOUS", "1")
+os.environ.setdefault("LIFE_INBOX_ALLOW_DEV_LOGIN", "1")

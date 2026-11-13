@@ -36,6 +36,7 @@ def ctx(tmp_path, monkeypatch):
     monkeypatch.delenv("LIFE_INBOX_ALLOWED_EMAIL_DOMAINS", raising=False)
     monkeypatch.delenv("LIFE_INBOX_ENV", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LIFE_INBOX_ALLOW_DEV_LOGIN", raising=False)
     for name in MODULES:
         sys.modules.pop(name, None)
     main = importlib.import_module("app.main")
@@ -454,6 +455,8 @@ def test_auth_options_are_public_and_hide_dev_login(ctx):
         "google_enabled": True,
         "dev_login_enabled": False,
         "local_anonymous": False,
+        "password_login_enabled": True,
+        "ai_enabled": False,
     }
 
 

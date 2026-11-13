@@ -132,6 +132,7 @@ class UserRecord(Base):
     avatar_path = Column(Text, nullable=True)  # relative upload-storage path
     date_of_birth = Column(Text, nullable=True)  # ISO date, e.g. 1999-08-21
     settings_json = Column(Text, nullable=True)  # see schemas.UserSettings
+    password_hash = Column(Text, nullable=True)  # local accounts only (app.auth)
 
 
 class AuthSessionRecord(Base):
@@ -805,6 +806,44 @@ def update_user_profile(
             user.display_name = display_name
         if date_of_birth is not _UNSET:
             user.date_of_birth = date_of_birth
+        session.commit()
+        return _user_to_dict(user)
+
+
+def get_password_account(email: str) -> Optional[dict]:
+    """The local account for an email, with its stored password hash."""
+    with SessionLocal() as session:
+        user = session.scalar(
+            select(UserRecord).where(UserRecord.email == email.strip().lower())
+        )
+        if user is None:
+            return None
+        return {**_user_to_dict(user), "password_hash": user.password_hash}
+
+
+def create_password_account(email: str, display_name: str, password_hash: str) -> dict:
+    """Create a local account, or give an old passwordless local account its
+    first password. Raises ValueError when the email already has a password
+    or belongs to a Google account."""
+    cleaned = email.strip().lower()
+    with SessionLocal() as session:
+        user = session.scalar(select(UserRecord).where(UserRecord.email == cleaned))
+        if user is not None:
+            if user.password_hash or user.auth_provider not in {"dev", "password"}:
+                raise ValueError("An account with this email already exists.")
+            user.password_hash = password_hash
+            user.auth_provider = "password"
+            if display_name:
+                user.display_name = display_name
+        else:
+            user = UserRecord(
+                email=cleaned,
+                display_name=display_name or cleaned.split("@", 1)[0],
+                auth_provider="password",
+                created_at=datetime.now(timezone.utc).isoformat(),
+                password_hash=password_hash,
+            )
+            session.add(user)
         session.commit()
         return _user_to_dict(user)
 

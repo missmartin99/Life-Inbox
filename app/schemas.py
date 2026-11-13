@@ -393,7 +393,7 @@ class UserSettings(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    theme: ThemeChoice = "dark"
+    theme: ThemeChoice = "light"
     bell_badge: bool = True  # show the number of pending tasks on the bell
     bell_overdue_alert: bool = True  # turn the bell red when tasks are overdue
     bell_scope: BellScope = "all"  # all | due_soon (overdue + today) | high

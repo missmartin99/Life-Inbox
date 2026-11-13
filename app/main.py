@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 import secrets
 import threading
@@ -303,6 +304,8 @@ PUBLIC_API_PATHS = {
     "/api/auth/google/start",
     "/api/auth/google/callback",
     "/api/auth/dev-login",
+    "/api/auth/login",
+    "/api/auth/register",
     "/api/auth/logout",
     "/api/auth/options",
 }
@@ -414,6 +417,8 @@ def auth_options():
             config.allow_dev_login and config.environment == "local"
         ),
         "local_anonymous": config.local_anonymous_allowed,
+        "password_login_enabled": config.password_login_enabled,
+        "ai_enabled": bool(os.getenv("OPENAI_API_KEY", "").strip()),
     }
 
 
@@ -520,6 +525,12 @@ def connected_apps():
         load_config(strict=False), owner_id, syncing=calendar_syncer.is_busy(owner_id)
     )
     ai_on = bool(os.getenv("OPENAI_API_KEY", "").strip())
+    base_url = os.getenv("OPENAI_BASE_URL", "").strip().lower()
+    provider = (
+        "OpenRouter" if "openrouter" in base_url
+        else "DeepSeek" if "deepseek" in base_url
+        else "OpenAI"
+    )
     return {
         "apps": [
             {
@@ -552,7 +563,8 @@ def connected_apps():
                 "status": "active" if ai_on else "off",
                 "detail": (
                     "On for everyone on this server. The text of your notes is "
-                    "sent to OpenAI to be organized."
+                    f"sent to {provider} to be organized."
+                    + ("" if provider == "OpenAI" else f" ({provider} runs the AI model.)")
                     if ai_on
                     else "Off on this server. Notes are organized by Life Inbox's "
                     "built-in rules, and nothing is sent to OpenAI."
@@ -600,6 +612,32 @@ def auth_dev_login(payload: dict, request: Request, response: Response):
     email = str(payload.get("email", "")).strip()
     display_name = payload.get("display_name")
     user = dev_login_user(email, display_name=display_name)
+    start_session(response, request, user["id"])
+    return user
+
+
+@app.post("/api/auth/register")
+def auth_register(payload: dict, request: Request, response: Response):
+    """Create an email + password account and sign in to it."""
+    from app.auth import register_password_user, start_session
+
+    user = register_password_user(
+        str(payload.get("email", "")),
+        payload.get("password", ""),
+        payload.get("display_name"),
+    )
+    start_session(response, request, user["id"])
+    return user
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: dict, request: Request, response: Response):
+    """Sign in with an email and password (checked against the stored hash)."""
+    from app.auth import authenticate_password_user, start_session
+
+    user = authenticate_password_user(
+        str(payload.get("email", "")), str(payload.get("password", ""))
+    )
     start_session(response, request, user["id"])
     return user
 
@@ -788,14 +826,49 @@ def login_page(request: Request, error: Optional[str] = None):
         return RedirectResponse("/", status_code=302)
     message = LOGIN_ERRORS.get(error or "", "")
     page = (APP_DIR / "templates" / "login.html").read_text(encoding="utf-8")
-    button = (
-        GOOGLE_SIGN_IN_BUTTON
-        if config.google_enabled
-        else '<p class="login-error">Google sign-in is not configured on this server.</p>'
-    )
+    if config.google_enabled and config.password_login_enabled:
+        button = (
+            GOOGLE_SIGN_IN_BUTTON
+            + '<div class="login-or" role="separator"><span>or use your email</span></div>'
+            + PASSWORD_SIGN_IN_FORM
+        )
+    elif config.google_enabled:
+        button = GOOGLE_SIGN_IN_BUTTON
+    elif config.password_login_enabled:
+        button = PASSWORD_SIGN_IN_FORM
+    else:
+        button = '<p class="login-error">Google sign-in is not configured on this server.</p>'
+
+    if not config.google_enabled:
+        page = page.replace(
+            "Google only shares your name, email address and profile picture with Life Inbox.",
+            "Each account has its own private inbox. Nobody else can see your notes.",
+        )
     return _versioned_static_refs(
         page.replace("__ERROR__", html.escape(message)).replace("__BUTTON__", button)
     )
+
+
+# Email + password sign-in, with a "Create account" mode.
+PASSWORD_SIGN_IN_FORM = (
+    '<div class="login-modes" role="tablist" aria-label="Sign in or create an account">'
+    '<button type="button" role="tab" class="login-mode active" data-mode="signin" aria-selected="true">Sign in</button>'
+    '<button type="button" role="tab" class="login-mode" data-mode="register" aria-selected="false">Create account</button>'
+    "</div>"
+    '<form id="passwordSignIn" class="auth-form login-dev-form" data-mode="signin" novalidate>'
+    '<label class="register-only" hidden>Name<input id="signInName" type="text" maxlength="80" '
+    'autocomplete="name" placeholder="Your name" /></label>'
+    '<label>Email<input id="signInEmail" type="email" maxlength="200" '
+    'autocomplete="email" placeholder="you@example.com" required /></label>'
+    '<label>Password<input id="signInPassword" type="password" maxlength="200" '
+    'autocomplete="current-password" placeholder="Your password" required /></label>'
+    '<label class="register-only" hidden>Confirm password<input id="signInConfirm" type="password" '
+    'maxlength="200" autocomplete="new-password" placeholder="Type it again" /></label>'
+    '<p class="login-hint register-only" hidden>At least 8 characters.</p>'
+    '<button type="submit" class="login-dev-submit">Sign in</button>'
+    '<p id="signInStatus" class="login-error" role="alert"></p>'
+    "</form>"
+)
 
 
 # Google's standard "Sign in with Google" button (multicolour G, neutral

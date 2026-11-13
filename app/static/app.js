@@ -702,7 +702,7 @@ function renderNote(note) {
   if (note.is_sensitive) {
     const sensBadge = document.createElement('span');
     sensBadge.className = 'feature-badge sensitive';
-    sensBadge.textContent = '🔒 Sensitive';
+    sensBadge.textContent = 'Sensitive';
     sensBadge.title = 'Content is never sent to external AI';
     featureBar.appendChild(sensBadge);
   }
@@ -710,14 +710,14 @@ function renderNote(note) {
   if (note.kind) {
     const kindBadge = document.createElement('span');
     kindBadge.className = `feature-badge ${note.kind}`;
-    kindBadge.textContent = `🏷️ ${note.kind.toUpperCase()}`;
+    kindBadge.textContent = `${note.kind.toUpperCase()}`;
     featureBar.appendChild(kindBadge);
   }
 
   const makeCardBtn = document.createElement('button');
   makeCardBtn.type = 'button';
   makeCardBtn.className = 'note-tool-btn';
-  makeCardBtn.textContent = '✨ Smart Card';
+  makeCardBtn.textContent = 'Smart Card';
   makeCardBtn.title = 'Convert to structured recipe, book, contact, or receipt card';
   makeCardBtn.onclick = async () => {
     makeCardBtn.textContent = 'Formatting…';
@@ -728,30 +728,30 @@ function renderNote(note) {
       root.replaceWith(renderNote(note));
       if (window.toast) window.toast(`Converted to ${res.kind} card!`);
     } catch {
-      makeCardBtn.textContent = '✨ Smart Card';
+      makeCardBtn.textContent = 'Smart Card';
     }
   };
 
   const extractEntBtn = document.createElement('button');
   extractEntBtn.type = 'button';
   extractEntBtn.className = 'note-tool-btn';
-  extractEntBtn.textContent = '👤 Entities';
+  extractEntBtn.textContent = 'Entities';
   extractEntBtn.title = 'Extract people, places, and organizations mentioned';
   extractEntBtn.onclick = async () => {
     extractEntBtn.textContent = 'Scanning…';
     try {
       const res = await fetchJson(`/api/items/${note.id}/entities`, {method: 'POST'});
-      extractEntBtn.textContent = `👤 ${res.length} Entities`;
+      extractEntBtn.textContent = `${res.length} Entities`;
       if (window.toast) window.toast(`Extracted ${res.length} entities! Check 05 Entities Treemap tab.`);
     } catch {
-      extractEntBtn.textContent = '👤 Entities';
+      extractEntBtn.textContent = 'Entities';
     }
   };
 
   const sensBtn = document.createElement('button');
   sensBtn.type = 'button';
   sensBtn.className = `note-tool-btn ${note.is_sensitive ? 'active' : ''}`;
-  sensBtn.textContent = note.is_sensitive ? '🔒 Private (Redacted)' : '🔓 Mark Sensitive';
+  sensBtn.textContent = note.is_sensitive ? 'Private (Redacted)' : 'Mark Sensitive';
   sensBtn.title = 'Toggle sensitive flag to bypass external AI';
   sensBtn.onclick = async () => {
     try {
@@ -1370,158 +1370,135 @@ async function createTopic(event) {
 }
 
 // ---------- Life Inbox Calendar Dashboard State & Handlers ----------
-let calCurrentYear = 2026;
-let calCurrentMonth = 10; // 0-indexed: 10 = November
-let calTodayDay = 12;     // Nov 12, 2026
-let calSelectedDay = 12;  // Default to today
+// Everything on the dashboard comes from the signed-in person's own data.
+// Nothing is prefilled: a new account starts with empty lists.
+function isoDay(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
 
-const defaultPinnedNotes = [
-  { id: 'pin-1', title: 'Wi-Fi details', detail: 'Network: LifeInbox_5G · Pass: stayorganized' },
-  { id: 'pin-2', title: 'Gym routine', detail: 'Mon: Push · Wed: Pull · Fri: Legs' }
-];
+const calNow = new Date();
+let calTodayIso = isoDay(calNow);
+let calCurrentYear = calNow.getFullYear();
+let calCurrentMonth = calNow.getMonth(); // 0-indexed
+let calSelectedDay = calNow.getDate();
 
 // Unified reactive dashboard state
 let dashState = {
   todayTasks: [],
   overdueTasks: [],
   upcomingTasks: [],
-  agenda: {}
+  agenda: {} // keyed by ISO date (YYYY-MM-DD)
 };
+
+let currentUserId = null;
+
+function pinsKey() {
+  // Pins are kept per account so people sharing a browser never see each other's.
+  return currentUserId ? `lifeInbox.pinned.${currentUserId}` : null;
+}
+
+function readPins() {
+  const key = pinsKey();
+  if (!key) return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(key) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePins(pins) {
+  const key = pinsKey();
+  if (!key) return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(pins));
+  } catch {}
+}
+
+function timeLabel(hhmm) {
+  if (!hhmm) return '';
+  const [h, m] = hhmm.split(':').map(Number);
+  if (Number.isNaN(h)) return '';
+  const date = new Date();
+  date.setHours(h, m || 0, 0, 0);
+  return date.toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
+}
+
+function relativeTime(iso) {
+  if (!iso) return '';
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return '';
+  const seconds = Math.max(0, (Date.now() - then.getTime()) / 1000);
+  if (seconds < 60) return 'Just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
+  if (seconds < 7 * 86400) return `${Math.floor(seconds / 86400)} d ago`;
+  return then.toLocaleDateString(undefined, {day: 'numeric', month: 'short'});
+}
+
+function toDashTask(t) {
+  return {
+    id: String(t.id),
+    text: t.text || t.title || 'Task',
+    due: t.normalized_due_on || t.due_on || null,
+    time: timeLabel(t.due_time),
+    done: t.status === 'completed'
+  };
+}
+
+function emptyRow(message) {
+  return `<li class="cal-empty-agenda muted">${esc(message)}</li>`;
+}
 
 async function loadDashboard() {
   try {
-    // 1. Fetch dashboard and attention data in parallel
     const [dashData, attentionData] = await Promise.allSettled([
       fetchJson('/api/dashboard', undefined, 'Unable to load dashboard.'),
       fetchJson('/api/attention', undefined, 'Unable to load attention.')
     ]);
+    if (dashData.status === 'rejected' && attentionData.status === 'rejected') {
+      throw dashData.reason;
+    }
 
     const data = dashData.status === 'fulfilled' ? dashData.value : {};
     const attention = attentionData.status === 'fulfilled' ? attentionData.value : {};
 
     if (data.pending_analysis_count > 0) watchAnalysis(false);
 
-    // 2. Setup Today Tasks
-    const rawTodayTasks = (attention.today && attention.today.length) 
-      ? attention.today 
-      : (data.open_tasks && data.open_tasks.slice(0, 3).length) 
-        ? data.open_tasks.slice(0, 3) 
-        : [
-            { id: 'demo-today-1', text: 'Pay bill', time: '11:00 AM' },
-            { id: 'demo-today-2', text: 'Call the bank', time: '2:30 PM' },
-            { id: 'demo-today-3', text: 'Submit assignment', time: '5:00 PM' }
-          ];
+    if (attention.reference_date) calTodayIso = attention.reference_date;
 
-    dashState.todayTasks = rawTodayTasks.map(t => ({
-      id: String(t.id),
-      text: t.text || t.title || 'Task',
-      time: t.time || 'Today',
-      done: Boolean(t.done || t.status === 'done' || t.status === 'completed')
-    }));
+    const byDue = (a, b) => String(a.due || '9999').localeCompare(String(b.due || '9999'));
+    dashState.todayTasks = (attention.today || []).map(toDashTask);
+    dashState.overdueTasks = (attention.overdue || []).map(toDashTask).sort(byDue);
+    dashState.upcomingTasks = (attention.upcoming || []).map(toDashTask).sort(byDue);
 
-    // 3. Setup Overdue Tasks
-    const rawOverdueTasks = (attention.overdue && attention.overdue.length)
-      ? attention.overdue
-      : [
-          { id: 'demo-overdue-1', text: 'Renew insurance', priority: 'High', time: 'Overdue' },
-          { id: 'demo-overdue-2', text: 'Reply to Amit', priority: 'High', time: 'Overdue' }
-        ];
-
-    dashState.overdueTasks = rawOverdueTasks.map(t => ({
-      id: String(t.id),
-      text: t.text || t.title || 'Task',
-      time: t.time || 'Overdue',
-      done: Boolean(t.done || t.status === 'done' || t.status === 'completed')
-    }));
-
-    // 4. Setup Upcoming Tasks
-    dashState.upcomingTasks = [
-      { id: 'demo-up-1', day: 'Sat', dayNum: 14, text: 'Dentist visit', time: '10:00 AM', done: false },
-      { id: 'demo-up-2', day: 'Mon', dayNum: 16, text: "Mom's birthday", time: 'All day', done: false },
-      { id: 'demo-up-3', day: 'Tue', dayNum: 17, text: 'Rent due', time: '9:00 AM', done: false }
+    // Calendar agenda: every dated open task, on its own date.
+    dashState.agenda = {};
+    const seen = new Set();
+    const dated = [
+      ...dashState.overdueTasks,
+      ...dashState.todayTasks,
+      ...dashState.upcomingTasks,
+      ...(attention.snoozed || []).map(toDashTask)
     ];
+    for (const task of dated) {
+      if (!task.due || seen.has(task.id)) continue;
+      seen.add(task.id);
+      (dashState.agenda[task.due] = dashState.agenda[task.due] || []).push(task);
+    }
 
-    // 5. Connect Calendar Agenda with shared task models
-    dashState.agenda = {
-      10: [
-        dashState.overdueTasks[0]
-      ].filter(Boolean),
-      11: [
-        dashState.overdueTasks[1]
-      ].filter(Boolean),
-      12: [
-        ...dashState.todayTasks
-      ],
-      14: [
-        dashState.upcomingTasks[0],
-        { id: 'demo-cal-14-2', text: 'Pay rent', time: '6:00 PM', done: false }
-      ].filter(Boolean),
-      16: [
-        dashState.upcomingTasks[1]
-      ].filter(Boolean),
-      17: [
-        dashState.upcomingTasks[2]
-      ].filter(Boolean)
-    };
-
-    // Render left-side task lists
     renderDueTodayList();
     renderOverdueList();
-
-    // 6. Populate Coming up
-    const upcomingEl = document.getElementById('upcomingList');
-    if (upcomingEl) {
-      upcomingEl.innerHTML = dashState.upcomingTasks.map(item => `
-        <li class="cal-upcoming-item" id="upcoming-${item.id}">
-          <span class="cal-day-tag mono">${esc(item.day || 'Soon')}</span>
-          <span class="cal-upcoming-text">${esc(item.text)}</span>
-        </li>
-      `).join('');
-    }
-
-    // 7. Populate Pinned notes
-    const pinnedEl = document.getElementById('pinnedList');
-    let pins = defaultPinnedNotes;
-    try {
-      const stored = window.localStorage.getItem('lifeInbox.pinned');
-      if (stored) pins = JSON.parse(stored);
-    } catch {}
-
-    if (pinnedEl) {
-      pinnedEl.innerHTML = pins.map((p, idx) => `
-        <li class="cal-pinned-item" title="${esc(p.detail || '')}">
-          <span class="cal-star">★</span>
-          <span class="cal-pinned-title">${esc(p.title)}</span>
-          <button type="button" class="cal-pin-del" onclick="removePin(${idx})" title="Unpin">×</button>
-        </li>
-      `).join('');
-    }
-
-    // 8. Populate Latest notes
-    const latestEl = document.getElementById('latestNotesList');
-    const rawNotes = (data.recently_captured && data.recently_captured.length)
-      ? data.recently_captured
-      : [
-          { id: 'n1', text: 'Idea for the project demo', timeAgo: '2 min ago' },
-          { id: 'n2', text: 'Spent ₹450 on groceries', timeAgo: 'Today' }
-        ];
-
-    if (latestEl) {
-      latestEl.innerHTML = rawNotes.slice(0, 4).map(n => `
-        <li class="cal-note-row" data-goto="notes">
-          <div class="cal-note-left">
-            <span class="cal-dot">•</span>
-            <span class="cal-note-txt">${esc(n.text || n.title || n.raw_text || ('Note #' + n.id))}</span>
-          </div>
-          <span class="cal-note-time mono">${esc(n.timeAgo || 'Recently')}</span>
-        </li>
-      `).join('');
-    }
-
-    // 9. Render Calendar and Day Agenda
+    renderUpcomingList();
+    renderPinnedList();
+    renderLatestNotes(data.recently_captured || []);
     renderCalendar();
 
-    setStatus('dashboardStatus', 'Dashboard synchronized.');
+    setStatus('dashboardStatus', '');
   } catch (err) {
     console.error(err);
     setStatus('dashboardStatus', 'We could not load the dashboard.', true);
@@ -1530,18 +1507,79 @@ async function loadDashboard() {
   }
 }
 
+function renderUpcomingList() {
+  const upcomingEl = document.getElementById('upcomingList');
+  if (!upcomingEl) return;
+  if (!dashState.upcomingTasks.length) {
+    upcomingEl.innerHTML = emptyRow('Nothing coming up.');
+    return;
+  }
+  upcomingEl.innerHTML = dashState.upcomingTasks.slice(0, 6).map(item => {
+    const day = item.due ? shortDate(item.due) : 'Soon';
+    return `
+      <li class="cal-upcoming-item" id="upcoming-${item.id}">
+        <span class="cal-day-tag mono">${esc(day)}</span>
+        <span class="cal-upcoming-text">${esc(item.text)}</span>
+      </li>`;
+  }).join('');
+}
+
+function renderPinnedList() {
+  const pinnedEl = document.getElementById('pinnedList');
+  if (!pinnedEl) return;
+  const pins = readPins();
+  if (!pins.length) {
+    pinnedEl.innerHTML = emptyRow('Nothing pinned yet.');
+    return;
+  }
+  pinnedEl.innerHTML = pins.map((p, idx) => `
+    <li class="cal-pinned-item" title="${esc(p.detail || '')}">
+      <span class="cal-star" aria-hidden="true"></span>
+      <span class="cal-pinned-title">${esc(p.title)}</span>
+      <button type="button" class="cal-pin-del" onclick="removePin(${idx})" title="Unpin" aria-label="Unpin">×</button>
+    </li>
+  `).join('');
+}
+
+function renderLatestNotes(notes) {
+  const latestEl = document.getElementById('latestNotesList');
+  if (!latestEl) return;
+  if (!notes.length) {
+    latestEl.innerHTML = emptyRow('No notes yet. Capture your first thought above.');
+    return;
+  }
+  latestEl.innerHTML = notes.slice(0, 4).map(n => {
+    const label = n.effective_title || n.title || n.raw_text || n.original_filename || ('Note #' + n.id);
+    return `
+      <li class="cal-note-row" data-goto="notes">
+        <div class="cal-note-left">
+          <span class="cal-dot" aria-hidden="true"></span>
+          <span class="cal-note-txt">${esc(label)}</span>
+        </div>
+        <span class="cal-note-time mono">${esc(relativeTime(n.created_at))}</span>
+      </li>`;
+  }).join('');
+}
+
+function taskRow(task, extraClass, boxClass) {
+  const time = task.time ? `<span class="cal-task-time mono">${esc(task.time)}</span>` : '';
+  return `
+    <li class="cal-task-item ${extraClass} ${task.done ? 'completed' : ''}" id="task-${task.id}">
+      <label class="cal-checkbox-label">
+        <input type="checkbox" data-task-id="${task.id}" ${task.done ? 'checked' : ''} onchange="toggleTask('${task.id}', event.target.checked)" />
+        <span class="cal-custom-box ${boxClass}"></span>
+        <span class="cal-task-name">${esc(task.text)}</span>
+        ${time}
+      </label>
+    </li>`;
+}
+
 function renderDueTodayList() {
   const dueTodayEl = document.getElementById('dueTodayList');
   if (!dueTodayEl) return;
-  dueTodayEl.innerHTML = dashState.todayTasks.map(task => `
-    <li class="cal-task-item ${task.done ? 'completed' : ''}" id="task-${task.id}">
-      <label class="cal-checkbox-label">
-        <input type="checkbox" data-task-id="${task.id}" ${task.done ? 'checked' : ''} onchange="toggleTask('${task.id}', event.target.checked)" />
-        <span class="cal-custom-box"></span>
-        <span class="cal-task-name">${esc(task.text)}</span>
-      </label>
-    </li>
-  `).join('');
+  dueTodayEl.innerHTML = dashState.todayTasks.length
+    ? dashState.todayTasks.map(task => taskRow(task, '', '')).join('')
+    : emptyRow('Nothing due today.');
   updateDueTodayCount();
 }
 
@@ -1557,15 +1595,9 @@ function updateDueTodayCount() {
 function renderOverdueList() {
   const overdueEl = document.getElementById('overdueList');
   if (!overdueEl) return;
-  overdueEl.innerHTML = dashState.overdueTasks.map(task => `
-    <li class="cal-task-item overdue ${task.done ? 'completed' : ''}" id="task-${task.id}">
-      <label class="cal-checkbox-label">
-        <input type="checkbox" data-task-id="${task.id}" ${task.done ? 'checked' : ''} onchange="toggleTask('${task.id}', event.target.checked)" />
-        <span class="cal-custom-box rose"></span>
-        <span class="cal-task-name">${esc(task.text)}</span>
-      </label>
-    </li>
-  `).join('');
+  overdueEl.innerHTML = dashState.overdueTasks.length
+    ? dashState.overdueTasks.map(task => taskRow(task, 'overdue', 'rose')).join('')
+    : emptyRow('Nothing overdue.');
   updateOverdueCount();
 }
 
@@ -1578,52 +1610,41 @@ function updateOverdueCount() {
   }
 }
 
-// Checkbox interactive toggler — fully bidirectional across 2x2 grid and calendar
-async function toggleTask(taskId, isChecked) {
-  // Update state in all collections
-  for (const t of dashState.todayTasks) {
-    if (t.id === taskId) t.done = isChecked;
+function setTaskDone(taskId, isChecked) {
+  const lists = [
+    dashState.todayTasks,
+    dashState.overdueTasks,
+    dashState.upcomingTasks,
+    ...Object.values(dashState.agenda)
+  ];
+  for (const list of lists) {
+    for (const t of list) if (t.id === taskId) t.done = isChecked;
   }
-  for (const t of dashState.overdueTasks) {
-    if (t.id === taskId) t.done = isChecked;
-  }
-  for (const t of dashState.upcomingTasks) {
-    if (t.id === taskId) t.done = isChecked;
-  }
-  for (const day in dashState.agenda) {
-    for (const t of dashState.agenda[day]) {
-      if (t.id === taskId) t.done = isChecked;
-    }
-  }
-
-  // Synchronize all DOM checkboxes with this ID
   document.querySelectorAll(`input[type="checkbox"][data-task-id="${taskId}"]`).forEach(cb => {
     cb.checked = isChecked;
   });
-
-  // Toggle list item visual state
-  const taskEl = document.getElementById(`task-${taskId}`);
-  if (taskEl) taskEl.classList.toggle('completed', isChecked);
-
-  const agendaEl = document.getElementById(`agenda-task-${taskId}`);
-  if (agendaEl) agendaEl.classList.toggle('done', isChecked);
-
-  // Recalculate badge counts
+  document.getElementById(`task-${taskId}`)?.classList.toggle('completed', isChecked);
+  document.getElementById(`agenda-task-${taskId}`)?.classList.toggle('done', isChecked);
   updateDueTodayCount();
   updateOverdueCount();
   updateSelectedDayPending();
   renderCalendarDaysGrid();
+}
 
-  // Audio feedback
-  if (typeof playSound === 'function') {
-    playSound(isChecked ? 'ping' : 'click');
-  }
-
-  // Backend persistence if real database task
-  if (!String(taskId).startsWith('demo-') && isChecked) {
-    try {
-      await fetch(`/api/tasks/${taskId}/complete`, { method: 'POST' });
-    } catch {}
+// Checkbox toggler: ticking completes the task, unticking reopens it.
+async function toggleTask(taskId, isChecked) {
+  setTaskDone(taskId, isChecked);
+  if (typeof playSound === 'function') playSound(isChecked ? 'ping' : 'click');
+  try {
+    await fetchJson(
+      `/api/tasks/${encodeURIComponent(taskId)}/${isChecked ? 'complete' : 'reopen'}`,
+      {method: 'POST'},
+      'Unable to update task.'
+    );
+    loadNotifications();
+  } catch {
+    setTaskDone(taskId, !isChecked); // undo the optimistic change
+    setStatus('dashboardStatus', 'Could not update that task. Please try again.', true);
   }
 }
 
@@ -1651,29 +1672,15 @@ async function dashAddNote(event) {
       '/api/items',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ raw_text: text })
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({raw_text: text})
       },
       'Unable to save note.'
     );
-
     input.value = '';
     setStatus('dashboardStatus', 'Note added.');
-
-    // Prepend to Latest notes stream immediately
-    const latestEl = document.getElementById('latestNotesList');
-    if (latestEl) {
-      const newRow = document.createElement('li');
-      newRow.className = 'cal-note-row new-entry';
-      newRow.innerHTML = `
-        <div class="cal-note-left">
-          <span class="cal-dot">•</span>
-          <span class="cal-note-txt">${esc(text)}</span>
-        </div>
-        <span class="cal-note-time mono">Just now</span>
-      `;
-      latestEl.prepend(newRow);
-    }
+    await loadDashboard();
+    loadNotes();
   } catch (err) {
     setStatus('dashboardStatus', 'Failed to add note.', true);
   } finally {
@@ -1700,22 +1707,22 @@ async function dashSearchAsk(event) {
       '/api/ask',
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: query })
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({question: query})
       },
       'Unable to answer question.'
     );
-
+    const cited = res.cited_items || res.cited_item_ids || [];
     drawer.hidden = false;
+    const citations = cited.length
+      ? `<div class="cal-answer-citations mono"><span>Sources:</span> ${cited
+          .map(c => `<span class="dash-tag">#${esc(typeof c === 'object' ? c.id : c)}</span>`)
+          .join(' ')}</div>`
+      : '';
     content.innerHTML = `
       <p class="cal-answer-query"><strong>Q: ${esc(query)}</strong></p>
       <div class="cal-answer-text">${esc(res.answer || 'No grounded answer found in inbox.')}</div>
-      ${res.cited_items && res.cited_items.length ? `
-        <div class="cal-answer-citations mono">
-          <span>Sources:</span>
-          ${res.cited_items.map(id => `<span class="dash-tag">#${id}</span>`).join(' ')}
-        </div>
-      ` : ''}
+      ${citations}
     `;
     setStatus('dashboardStatus', 'Answer ready.');
   } catch (err) {
@@ -1723,7 +1730,7 @@ async function dashSearchAsk(event) {
     content.innerHTML = `<p class="muted error">${esc(err.message || 'Error querying notes.')}</p>`;
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Ask ↵';
+    btn.textContent = 'Ask';
   }
 }
 
@@ -1732,39 +1739,22 @@ function closeCalAskDrawer() {
   if (drawer) drawer.hidden = true;
 }
 
-// Pinning notes
+// Pinning notes (kept in this browser, per account)
 function promptAddPin() {
   const title = prompt('Enter a note title to pin:');
-  if (!title) return;
+  if (!title || !title.trim()) return;
   const detail = prompt('Optional details / notes:') || '';
-
-  let pins = defaultPinnedNotes;
-  try {
-    const stored = window.localStorage.getItem('lifeInbox.pinned');
-    if (stored) pins = JSON.parse(stored);
-  } catch {}
-
-  pins.push({ id: 'pin-' + Date.now(), title: title.trim(), detail: detail.trim() });
-  try {
-    window.localStorage.setItem('lifeInbox.pinned', JSON.stringify(pins));
-  } catch {}
-
-  loadDashboard();
+  const pins = readPins();
+  pins.push({id: 'pin-' + Date.now(), title: title.trim(), detail: detail.trim()});
+  writePins(pins);
+  renderPinnedList();
 }
 
 function removePin(index) {
-  let pins = defaultPinnedNotes;
-  try {
-    const stored = window.localStorage.getItem('lifeInbox.pinned');
-    if (stored) pins = JSON.parse(stored);
-  } catch {}
-
+  const pins = readPins();
   pins.splice(index, 1);
-  try {
-    window.localStorage.setItem('lifeInbox.pinned', JSON.stringify(pins));
-  } catch {}
-
-  loadDashboard();
+  writePins(pins);
+  renderPinnedList();
 }
 
 // Right Calendar Sidebar Logic
@@ -1773,10 +1763,20 @@ const monthNames = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
+function calTodayParts() {
+  const [y, m, d] = calTodayIso.split('-').map(Number);
+  return {year: y, month: m - 1, day: d};
+}
+
+function selectedIso() {
+  return isoDay(new Date(calCurrentYear, calCurrentMonth, calSelectedDay));
+}
+
 function jumpToToday() {
-  calCurrentYear = 2026;
-  calCurrentMonth = 10; // November
-  calSelectedDay = calTodayDay;
+  const today = calTodayParts();
+  calCurrentYear = today.year;
+  calCurrentMonth = today.month;
+  calSelectedDay = today.day;
   renderCalendar();
   if (typeof playSound === 'function') playSound('click');
 }
@@ -1790,6 +1790,8 @@ function navMonth(dir) {
     calCurrentMonth = 0;
     calCurrentYear += 1;
   }
+  const totalDays = new Date(calCurrentYear, calCurrentMonth + 1, 0).getDate();
+  calSelectedDay = Math.min(calSelectedDay, totalDays);
   renderCalendar();
 }
 
@@ -1815,40 +1817,34 @@ function renderCalendarDaysGrid() {
   const daysGrid = document.getElementById('calDaysGrid');
   if (!daysGrid) return;
 
-  // First day of month (0 = Sun, 1 = Mon, ..., 6 = Sat)
   const firstDay = new Date(calCurrentYear, calCurrentMonth, 1).getDay();
-  // Monday-based (0 = Mon, ..., 6 = Sun)
-  const startingCol = (firstDay + 6) % 7;
+  const startingCol = (firstDay + 6) % 7; // Monday-based
   const totalDays = new Date(calCurrentYear, calCurrentMonth + 1, 0).getDate();
 
   let html = '';
-
-  // Leading empty dots
   for (let i = 0; i < startingCol; i++) {
     html += `<span class="cal-empty-dot">·</span>`;
   }
 
-  // Days
   for (let d = 1; d <= totalDays; d++) {
-    const isSelected = (d === calSelectedDay);
-    const isToday = (d === calTodayDay && calCurrentMonth === 10 && calCurrentYear === 2026);
-    const items = dashState.agenda[d] || [];
-    
+    const iso = isoDay(new Date(calCurrentYear, calCurrentMonth, d));
+    const isSelected = d === calSelectedDay;
+    const isToday = iso === calTodayIso;
+    const items = dashState.agenda[iso] || [];
+
     let badgeHtml = '';
     if (items.length > 0) {
       const pendingCount = items.filter(t => !t.done).length;
-      if (pendingCount > 0) {
-        badgeHtml = `<span class="cal-day-badge-pip pending">${pendingCount}</span>`;
-      } else {
-        badgeHtml = `<span class="cal-day-badge-pip all-done">✓</span>`;
-      }
+      badgeHtml = pendingCount > 0
+        ? `<span class="cal-day-badge-pip pending">${pendingCount}</span>`
+        : `<span class="cal-day-badge-pip all-done">✓</span>`;
     }
 
     html += `
-      <button type="button" 
-        class="cal-day-cell ${isSelected ? 'selected' : ''} ${isToday ? 'is-today' : ''}" 
+      <button type="button"
+        class="cal-day-cell ${isSelected ? 'selected' : ''} ${isToday ? 'is-today' : ''}"
         onclick="selectCalDay(${d})"
-        title="Day ${d}">
+        title="${esc(shortDate(iso))}">
         <span class="day-num">${d}</span>
         ${badgeHtml}
       </button>
@@ -1864,19 +1860,17 @@ function renderSelectedDayAgenda() {
   const agendaList = document.getElementById('calSelectedDayList');
   if (!headTitle || !agendaList) return;
 
+  const iso = selectedIso();
   const dateObj = new Date(calCurrentYear, calCurrentMonth, calSelectedDay);
   const weekdayShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dateObj.getDay()];
-  
   headTitle.textContent = `${weekdayShort} ${calSelectedDay}`;
-  
-  const isToday = (calSelectedDay === calTodayDay && calCurrentMonth === 10 && calCurrentYear === 2026);
-  if (todayTag) todayTag.hidden = !isToday;
+  if (todayTag) todayTag.hidden = iso !== calTodayIso;
 
   updateSelectedDayPending();
 
-  const tasks = dashState.agenda[calSelectedDay] || [];
+  const tasks = dashState.agenda[iso] || [];
   if (tasks.length === 0) {
-    agendaList.innerHTML = `<li class="cal-empty-agenda muted">No tasks scheduled for this day.</li>`;
+    agendaList.innerHTML = emptyRow('No tasks scheduled for this day.');
     return;
   }
 
@@ -1895,14 +1889,14 @@ function updateSelectedDayPending() {
   const headPending = document.getElementById('calSelectedDayPending');
   if (!headPending) return;
 
-  const tasks = dashState.agenda[calSelectedDay] || [];
+  const tasks = dashState.agenda[selectedIso()] || [];
   const pending = tasks.filter(t => !t.done).length;
 
   if (tasks.length === 0) {
     headPending.textContent = '0 pending';
     headPending.classList.remove('all-done');
   } else if (pending === 0) {
-    headPending.textContent = '✓ All done!';
+    headPending.textContent = 'All done';
     headPending.classList.add('all-done');
   } else {
     headPending.textContent = `${pending} pending`;
@@ -1910,34 +1904,38 @@ function updateSelectedDayPending() {
   }
 }
 
-function addAgendaItem(event) {
+// Adding a task for a date saves it as a note ("... on 14 November 2026"), so
+// it is stored in this person's inbox and turned into a dated task.
+async function addAgendaItem(event) {
   event.preventDefault();
   const input = document.getElementById('calAgendaInput');
   const text = input ? input.value.trim() : '';
   if (!text) return;
 
-  if (!dashState.agenda[calSelectedDay]) {
-    dashState.agenda[calSelectedDay] = [];
+  const dateObj = new Date(calCurrentYear, calCurrentMonth, calSelectedDay);
+  const when = dateObj.toLocaleDateString('en-GB', {day: 'numeric', month: 'long', year: 'numeric'});
+  input.disabled = true;
+  try {
+    await fetchJson(
+      '/api/items',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({raw_text: `${text} on ${when}`})
+      },
+      'Unable to save task.'
+    );
+    input.value = '';
+    setStatus('dashboardStatus', 'Task saved. It appears on the calendar once it is organized.');
+    if (typeof playSound === 'function') playSound('click');
+    loadNotes();
+    watchAnalysis(true);
+  } catch {
+    setStatus('dashboardStatus', 'Could not save that task. Please try again.', true);
+  } finally {
+    input.disabled = false;
+    input.focus();
   }
-
-  const newItem = {
-    id: 'cal-' + calSelectedDay + '-' + Date.now(),
-    text: text,
-    time: 'Scheduled',
-    done: false
-  };
-
-  dashState.agenda[calSelectedDay].push(newItem);
-
-  // If adding to today (12), also push to todayTasks and re-render due today list
-  if (calSelectedDay === calTodayDay && calCurrentMonth === 10 && calCurrentYear === 2026) {
-    dashState.todayTasks.push(newItem);
-    renderDueTodayList();
-  }
-
-  input.value = '';
-  renderCalendar();
-  if (typeof playSound === 'function') playSound('click');
 }
 
 /* ---------- Notification bell: pending tasks, high to low priority ---------- */
@@ -2221,6 +2219,13 @@ function showAccountName(fullName) {
 
 async function loadAuthUser() {
   authOptions = await loadAuthOptions();
+  const aiPill = document.getElementById('aiStatusPill');
+  if (aiPill) {
+    // Only claim AI is on when the server really has an AI key.
+    document.getElementById('aiStatusText').textContent = authOptions.ai_enabled ? 'AI Active' : 'Built-in organizer';
+    aiPill.classList.toggle('off', !authOptions.ai_enabled);
+    aiPill.hidden = false;
+  }
   document.getElementById('devLoginForm').hidden = !authOptions.dev_login_enabled;
   const actions = document.getElementById('authActions');
   try {
@@ -2229,6 +2234,12 @@ async function loadAuthUser() {
     // The anonymous Local Owner (plain local dev) has no session to end.
     const isLocalOwner = user.auth_provider === 'local';
     actions.hidden = isLocalOwner;
+    // Signed-in people switch accounts through the sign-in page instead.
+    document.getElementById('devLoginForm').hidden = !(isLocalOwner && authOptions.dev_login_enabled);
+    if (currentUserId !== user.id) {
+      currentUserId = user.id;
+      renderPinnedList();
+    }
     showAccountName(isLocalOwner ? '' : user.display_name);
     showProfilePhoto(isLocalOwner ? null : user);
     // The saved theme may have been changed on another device.
@@ -2256,9 +2267,8 @@ async function devLogin(event) {
       'Unable to sign in.'
     );
     setStatus('authStatus', `Signed in as ${user.email}`);
-    await loadAuthUser();
-    await loadNotes();
-    await loadDashboard();
+    // Reload so nothing from the previous account stays on screen.
+    window.location.assign('/');
   } catch {
     setStatus('authStatus', 'Sign-in failed (dev login may be disabled).', true);
   }
@@ -2267,8 +2277,8 @@ async function devLogin(event) {
 async function logoutSession() {
   try {
     await fetchJson('/api/auth/logout', {method: 'POST'}, 'Unable to sign out.');
-    // Reload: Google mode lands on /login, local dev falls back to Local Owner.
-    window.location.assign('/');
+    // Signed-out visitors land on the sign-in page.
+    window.location.assign('/login');
   } catch {
     setStatus('authStatus', 'Sign-out failed.', true);
   }
@@ -2278,7 +2288,7 @@ async function switchAccount() {
   try {
     await fetchJson('/api/auth/logout', {method: 'POST'}, 'Unable to sign out.');
     // Google shows its account picker, so a different account can be chosen.
-    window.location.assign(authOptions.google_enabled ? '/api/auth/google/start' : '/');
+    window.location.assign(authOptions.google_enabled ? '/api/auth/google/start' : '/login');
   } catch {
     setStatus('authStatus', 'Could not switch accounts. Please try again.', true);
   }
@@ -2317,21 +2327,57 @@ let currentTimelineStartDate = null;
 let currentTimelineEndDate = null;
 let currentDossierEntityId = null;
 
-const TIMELINE_MONTHS = [
-  { key: '2025-11', label: "Nov '25", start: '2025-11-01', end: '2025-11-30' },
-  { key: '2025-12', label: "Dec '25", start: '2025-12-01', end: '2025-12-31' },
-  { key: '2026-01', label: "Jan '26", start: '2026-01-01', end: '2026-01-31' },
-  { key: '2026-02', label: "Feb '26", start: '2026-02-01', end: '2026-02-28' },
-  { key: '2026-03', label: "Mar '26", start: '2026-03-01', end: '2026-03-31' },
-  { key: '2026-04', label: "Apr '26", start: '2026-04-01', end: '2026-04-30' },
-  { key: '2026-05', label: "May '26", start: '2026-05-01', end: '2026-05-31' },
-  { key: '2026-06', label: "Jun '26", start: '2026-06-01', end: '2026-06-30' },
-  { key: '2026-07', label: "Jul '26", start: '2026-07-01', end: '2026-07-31' },
-  { key: '2026-08', label: "Aug '26", start: '2026-08-01', end: '2026-08-31' },
-  { key: '2026-09', label: "Sep '26", start: '2026-09-01', end: '2026-09-30' },
-  { key: '2026-10', label: "Oct '26", start: '2026-10-01', end: '2026-10-31' },
-  { key: '2026-11', label: "Nov '26", start: '2026-11-01', end: '2026-11-12' },
-];
+// The timeline covers the last 13 months, ending today (worked out on load).
+function timelineIso(date) {
+  return isoDay(date);
+}
+
+const TIMELINE_TODAY = new Date();
+const TIMELINE_MONTHS = Array.from({length: 13}, (_, i) => {
+  const first = new Date(TIMELINE_TODAY.getFullYear(), TIMELINE_TODAY.getMonth() - 12 + i, 1);
+  const last = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+  const end = i === 12 ? TIMELINE_TODAY : last;
+  return {
+    key: timelineIso(first).slice(0, 7),
+    label: `${first.toLocaleDateString('en-US', {month: 'short'})} '${String(first.getFullYear()).slice(2)}`,
+    start: timelineIso(first),
+    end: timelineIso(end)
+  };
+});
+const TIMELINE_FIRST = TIMELINE_MONTHS[0].start;
+const TIMELINE_LAST = TIMELINE_MONTHS[12].end;
+
+function monthIndexFor(iso) {
+  const idx = TIMELINE_MONTHS.findIndex(m => m.end >= iso);
+  return idx === -1 ? 12 : idx;
+}
+
+function longMonth(iso) {
+  const [y, m] = iso.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-US', {month: 'short', year: 'numeric'});
+}
+
+function initTimelineControls() {
+  const ticks = document.querySelector('.timeline-ticks');
+  if (ticks) {
+    ticks.innerHTML = [0, 2, 4, 6, 8, 10, 12]
+      .map(i => `<span>${esc(TIMELINE_MONTHS[i].label)}</span>`).join('');
+  }
+  for (const id of ['timelineDateFrom', 'timelineDateTo']) {
+    const input = document.getElementById(id);
+    if (!input) continue;
+    input.min = TIMELINE_FIRST;
+    input.max = TIMELINE_LAST;
+  }
+  const from = document.getElementById('timelineDateFrom');
+  const to = document.getElementById('timelineDateTo');
+  if (from) from.value = TIMELINE_FIRST;
+  if (to) to.value = TIMELINE_LAST;
+  const display = document.getElementById('timelineRangeDisplay');
+  if (display) display.textContent = `All Time (${longMonth(TIMELINE_FIRST)} – ${longMonth(TIMELINE_LAST)})`;
+  const yearChip = document.querySelector('.entity-time-chip[onclick*="thisyear"]');
+  if (yearChip) yearChip.textContent = `Year ${TIMELINE_TODAY.getFullYear()}`;
+}
 
 function updateTimelineSliderVisual(startIdx, endIdx) {
   const highlight = document.getElementById('timelineSliderHighlight');
@@ -2371,7 +2417,6 @@ function onTimelineSliderChange() {
   if (dateFrom) dateFrom.value = startEntry.start;
   if (dateTo) dateTo.value = endEntry.end;
 
-  // Clear active pills
   document.querySelectorAll('.entity-time-chip').forEach(p => p.classList.remove('active'));
 
   applyTimelineRange(startEntry.start, endEntry.end, `${startEntry.label} – ${endEntry.label}`);
@@ -2382,17 +2427,17 @@ function onTimelineDateInputChange() {
   const dateTo = document.getElementById('timelineDateTo');
   if (!dateFrom || !dateTo) return;
 
-  const startVal = dateFrom.value;
-  const endVal = dateTo.value;
+  let startVal = dateFrom.value || TIMELINE_FIRST;
+  let endVal = dateTo.value || TIMELINE_LAST;
+  if (startVal > endVal) [startVal, endVal] = [endVal, startVal];
 
-  // Sync sliders to closest months
-  const sIdx = Math.max(0, TIMELINE_MONTHS.findIndex(m => m.end >= startVal));
-  const eIdx = Math.max(0, TIMELINE_MONTHS.findIndex(m => m.end >= endVal));
+  const sIdx = monthIndexFor(startVal);
+  const eIdx = monthIndexFor(endVal);
   const sInput = document.getElementById('timelineSliderStart');
   const eInput = document.getElementById('timelineSliderEnd');
   if (sInput) sInput.value = sIdx;
-  if (eInput) eInput.value = eIdx !== -1 ? eIdx : 12;
-  updateTimelineSliderVisual(sIdx, eIdx !== -1 ? eIdx : 12);
+  if (eInput) eInput.value = eIdx;
+  updateTimelineSliderVisual(sIdx, eIdx);
 
   document.querySelectorAll('.entity-time-chip').forEach(p => p.classList.remove('active'));
   applyTimelineRange(startVal, endVal, `${startVal} to ${endVal}`);
@@ -2400,57 +2445,50 @@ function onTimelineDateInputChange() {
 
 function setTimelinePreset(preset) {
   document.querySelectorAll('.entity-time-chip').forEach(btn => {
-    btn.classList.toggle('active', btn.getAttribute('onclick').includes(preset));
+    btn.classList.toggle('active', btn.getAttribute('onclick').includes(`'${preset}'`));
   });
 
-  const sInput = document.getElementById('timelineSliderStart');
-  const eInput = document.getElementById('timelineSliderEnd');
-  const dateFrom = document.getElementById('timelineDateFrom');
-  const dateTo = document.getElementById('timelineDateTo');
+  const daysAgo = n => {
+    const d = new Date(TIMELINE_TODAY);
+    d.setDate(d.getDate() - n);
+    return timelineIso(d);
+  };
 
-  let s = null, e = null, sIdx = 0, eIdx = 12, label = 'All Time';
-
-  if (preset === 'all') {
-    s = null;
-    e = null;
-    sIdx = 0;
-    eIdx = 12;
-    label = 'All Time (Nov 2025 – Nov 2026)';
-  } else if (preset === 'sep2026') {
-    s = '2026-09-01';
-    e = '2026-09-30';
-    sIdx = 10;
-    eIdx = 10;
-    label = 'September 2026 (Jaipur Trip)';
-  } else if (preset === '30d') {
-    s = '2026-10-13';
-    e = '2026-11-12';
-    sIdx = 11;
-    eIdx = 12;
+  let s = null;
+  let e = null;
+  let label = `All Time (${longMonth(TIMELINE_FIRST)} – ${longMonth(TIMELINE_LAST)})`;
+  if (preset === '30d') {
+    s = daysAgo(30);
+    e = TIMELINE_LAST;
     label = 'Past 30 Days';
   } else if (preset === '90d') {
-    s = '2026-08-14';
-    e = '2026-11-12';
-    sIdx = 9;
-    eIdx = 12;
+    s = daysAgo(90);
+    e = TIMELINE_LAST;
     label = 'Past 90 Days';
   } else if (preset === 'thisyear') {
-    s = '2026-01-01';
-    e = '2026-11-12';
-    sIdx = 2;
-    eIdx = 12;
-    label = 'Year 2026';
+    s = `${TIMELINE_TODAY.getFullYear()}-01-01`;
+    e = TIMELINE_LAST;
+    label = `Year ${TIMELINE_TODAY.getFullYear()}`;
   }
 
+  const sIdx = s ? monthIndexFor(s < TIMELINE_FIRST ? TIMELINE_FIRST : s) : 0;
+  const eIdx = 12;
+  const sInput = document.getElementById('timelineSliderStart');
+  const eInput = document.getElementById('timelineSliderEnd');
   if (sInput) sInput.value = sIdx;
   if (eInput) eInput.value = eIdx;
   updateTimelineSliderVisual(sIdx, eIdx);
 
-  if (dateFrom) dateFrom.value = s || '2025-11-01';
-  if (dateTo) dateTo.value = e || '2026-11-12';
+  const dateFrom = document.getElementById('timelineDateFrom');
+  const dateTo = document.getElementById('timelineDateTo');
+  if (dateFrom) dateFrom.value = s && s > TIMELINE_FIRST ? s : TIMELINE_FIRST;
+  if (dateTo) dateTo.value = e || TIMELINE_LAST;
 
   applyTimelineRange(s, e, label);
 }
+
+// Runs here, once the timeline months above exist.
+initTimelineControls();
 
 function applyTimelineRange(start, end, displayLabel) {
   currentTimelineStartDate = start;
@@ -2497,7 +2535,7 @@ async function loadEntities(typeFilter = undefined) {
     listEl.innerHTML = entities.map(ent => `
       <div class="entity-card" onclick="showDossier(${ent.id})">
         <div class="entity-card-head">
-          <span class="feature-badge ${ent.type}">${ent.type === 'person' ? '👤 Person' : ent.type === 'place' ? '📍 Place' : '🏢 Org'}</span>
+          <span class="feature-badge ${ent.type}">${ent.type === 'person' ? 'Person' : ent.type === 'place' ? 'Place' : 'Org'}</span>
           <span class="mono" style="font-size:12px; color:var(--muted)">${ent.item_count || ent.mention_count || 1} mentions</span>
         </div>
         <div class="entity-card-title">${esc(ent.name)}</div>
@@ -2764,8 +2802,6 @@ function renderEntityTreemap(entities) {
   }
 
   container.innerHTML = layout.map(cell => {
-    const icon = cell.type === 'person' ? '👤' : cell.type === 'place' ? '📍' : '🏢';
-    const showIcon = cell.w >= 45 && cell.h >= 45;
     const showCount = cell.w >= 70 && cell.h >= 55;
     const isSmall = cell.w < 60 || cell.h < 35;
     const countText = `${cell.value} ${cell.value === 1 ? 'mention' : 'mentions'}`;
@@ -2780,7 +2816,6 @@ function renderEntityTreemap(entities) {
            aria-label="${esc(tooltip)}"
            onclick="showDossier(${cell.id})"
            onkeydown="if(event.key==='Enter'||event.key===' ') { event.preventDefault(); showDossier(${cell.id}); }">
-        ${showIcon ? `<span class="treemap-cell-icon" aria-hidden="true">${icon}</span>` : ''}
         <span class="treemap-cell-name" style="${isSmall ? 'font-size:11px;' : ''}">${esc(cell.name)}</span>
         ${showCount ? `<span class="treemap-cell-count">${countText}</span>` : ''}
       </div>
@@ -2960,8 +2995,8 @@ function filterAndRenderCards() {
 
       bodyHtml = `
         <div style="display:flex; gap:8px; margin:6px 0 10px 0;">
-          <span class="feature-badge" style="background:rgba(245, 158, 11, 0.15); color:var(--amber);">⏱️ ${esc(prep)}</span>
-          <span class="feature-badge" style="background:rgba(99, 102, 241, 0.12); color:var(--indigo-text);">🍽️ ${esc(String(servings))} servings</span>
+          <span class="feature-badge" style="background:rgba(245, 158, 11, 0.15); color:var(--amber);">${esc(prep)}</span>
+          <span class="feature-badge" style="background:rgba(99, 102, 241, 0.12); color:var(--indigo-text);">${esc(String(servings))} servings</span>
         </div>
         <div class="mono" style="font-size:11px; color:var(--muted); text-transform:uppercase; margin-bottom:4px;">Ingredients:</div>
         <div style="display:flex; flex-direction:column; gap:2px; margin-bottom:6px;">
@@ -2976,7 +3011,7 @@ function filterAndRenderCards() {
       `;
       actionHtml = `
         <div class="card-action-bar">
-          <button type="button" class="card-action-btn" onclick="openRecipeCookMode(${c.id})">🍳 Cook Mode & Timer</button>
+          <button type="button" class="card-action-btn" onclick="openRecipeCookMode(${c.id})">Cook Mode & Timer</button>
         </div>
       `;
     } else if (k === 'book') {
@@ -2985,7 +3020,7 @@ function filterAndRenderCards() {
       const status = f.status || 'To Read';
       const isFinished = status.toLowerCase().includes('finish');
       const isReading = status.toLowerCase().includes('reading');
-      const statusPill = isFinished ? '✅ Finished' : isReading ? '📖 Reading' : '🔖 To Read';
+      const statusPill = isFinished ? 'Finished' : isReading ? 'Reading' : 'To Read';
 
       bodyHtml = `
         <div class="typed-card-fields" style="margin-top:8px;">
@@ -2997,7 +3032,7 @@ function filterAndRenderCards() {
       actionHtml = `
         <div class="card-action-bar">
           <button type="button" class="card-action-btn" onclick="cycleBookStatus(${c.id}, event)" title="Click to cycle status: To Read → Reading → Finished">
-            🔄 Switch: ${isFinished ? 'Set To Read' : isReading ? 'Mark Finished' : 'Start Reading'}
+            Switch: ${isFinished ? 'Set To Read' : isReading ? 'Mark Finished' : 'Start Reading'}
           </button>
         </div>
       `;
@@ -3017,10 +3052,10 @@ function filterAndRenderCards() {
       actionHtml = `
         <div class="card-action-bar">
           <button type="button" class="reimbursed-toggle-btn ${reimbursed ? 'is-reimbursed' : ''}" onclick="toggleCardReimbursed(${c.id}, event)" title="Click to toggle expense reimbursement status">
-            ${reimbursed ? '✅ Reimbursed' : '⏳ Mark Reimbursed'}
+            ${reimbursed ? 'Reimbursed' : 'Mark Reimbursed'}
           </button>
           <button type="button" class="card-action-btn" onclick="copyExpenseSnippet(${c.id}, event)" title="Copy expense row">
-            📋 Copy Details
+            Copy Details
           </button>
         </div>
       `;
@@ -3040,10 +3075,10 @@ function filterAndRenderCards() {
       `;
       actionHtml = `
         <div class="card-action-bar">
-          ${cleanPhone ? `<a href="tel:${cleanPhone}" class="card-action-btn">📞 Call</a>` : ''}
-          ${cleanPhone ? `<a href="https://wa.me/${cleanPhone.replace('+', '')}" target="_blank" class="card-action-btn whatsapp-btn">💬 WhatsApp</a>` : ''}
-          ${email ? `<a href="mailto:${esc(email)}" class="card-action-btn">✉️ Email</a>` : ''}
-          <button type="button" class="card-action-btn dossier-link-btn" onclick="openContactInTreemap('${esc(name)}')">👤 View Treemap</button>
+          ${cleanPhone ? `<a href="tel:${cleanPhone}" class="card-action-btn">Call</a>` : ''}
+          ${cleanPhone ? `<a href="https://wa.me/${cleanPhone.replace('+', '')}" target="_blank" class="card-action-btn whatsapp-btn">WhatsApp</a>` : ''}
+          ${email ? `<a href="mailto:${esc(email)}" class="card-action-btn">Email</a>` : ''}
+          <button type="button" class="card-action-btn dossier-link-btn" onclick="openContactInTreemap('${esc(name)}')">View Treemap</button>
         </div>
       `;
     } else if (k === 'event') {
@@ -3058,8 +3093,8 @@ function filterAndRenderCards() {
       `;
       actionHtml = `
         <div class="card-action-bar">
-          <button type="button" class="card-action-btn" onclick="downloadEventIcs(${c.id})">📅 Add to Calendar (.ics)</button>
-          <a href="https://maps.google.com/?q=${encodeURIComponent(venue)}" target="_blank" class="card-action-btn">🗺️ Maps</a>
+          <button type="button" class="card-action-btn" onclick="downloadEventIcs(${c.id})">Add to Calendar (.ics)</button>
+          <a href="https://maps.google.com/?q=${encodeURIComponent(venue)}" target="_blank" class="card-action-btn">Maps</a>
         </div>
       `;
     } else {
@@ -3354,7 +3389,7 @@ function toggleCookTimer() {
         if (btn) btn.textContent = 'Start';
         cookTimerSeconds = 0;
         updateCookTimerDisplay();
-        alert('🔔 Kitchen Timer: Recipe step complete!');
+        alert('Kitchen Timer: Recipe step complete!');
       } else {
         updateCookTimerDisplay();
       }

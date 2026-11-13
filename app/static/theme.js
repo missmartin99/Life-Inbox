@@ -6,7 +6,7 @@
   var KEY = 'lifeInbox.theme';
   var CHOICES = ['system', 'dark', 'light'];
   var deviceLight = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
-  var choice = 'dark';
+  var choice = 'light'; // light is the default for everyone
   try {
     var saved = window.localStorage.getItem(KEY);
     if (CHOICES.indexOf(saved) >= 0) choice = saved;
@@ -32,7 +32,7 @@
   window.lifeInboxTheme = {
     // choice: 'system' | 'dark' | 'light'
     apply: function (next) {
-      choice = CHOICES.indexOf(next) >= 0 ? next : 'dark';
+      choice = CHOICES.indexOf(next) >= 0 ? next : 'light';
       try {
         window.localStorage.setItem(KEY, choice);
       } catch (error) {

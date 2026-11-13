@@ -212,7 +212,7 @@
   const heroInner = title?.closest('.hero-inner');
   const letters = title ? Array.from(title.querySelectorAll('.sp')) : [];
   const NOTE_COLORS = ['#A5B4FC', '#C4B5FD', '#67E8F9'];
-  const NOTE_GLYPHS = ['♪', '♫', '♩', '♬'];
+  const NOTE_GLYPHS = ['•']; // plain dots, no emoji
   const lastPlayed = new Map();
   let hintShown = false;
 
@@ -278,7 +278,7 @@
     hintShown = true;
     const hint = document.createElement('span');
     hint.className = 'title-hint mono';
-    hint.textContent = 'Click anywhere, then glide over the letters to play Für Elise ♪';
+    hint.textContent = 'Click anywhere, then glide over the letters to play Für Elise';
     hint.style.top = `${title.offsetTop - 34}px`;
     heroInner.append(hint);
     requestAnimationFrame(() => hint.classList.add('show'));
@@ -431,7 +431,7 @@
         const heart = document.createElement('span');
         heart.className = 'cat-heart';
         heart.setAttribute('aria-hidden', 'true');
-        heart.textContent = '♥';
+        heart.textContent = '•';
         heart.style.setProperty('--dx', `${Math.round(Math.random() * 40 - 20)}px`);
         heart.style.color = i % 2 ? '#A5B4FC' : '#F9A8D4';
         catWrap.append(heart);
@@ -560,7 +560,7 @@
     flash('happy', 2000);
     flash('purring', 2000);
     hearts(catState.happy >= 90 ? 6 : 4);
-    say(catState.happy >= 95 ? 'purrrr… ♥' : 'purrrr… zz', 1900);
+    say(catState.happy >= 95 ? 'purrrr…' : 'purrrr… zz', 1900);
     if (soundOn) catSound(() => purr(1.9));
     addHappy(8);
   }

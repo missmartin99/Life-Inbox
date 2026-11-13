@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="dark" />
-  <meta name="theme-color" content="#0A0A0A" />
+  <meta name="color-scheme" content="light" />
+  <meta name="theme-color" content="#F6F6F8" />
   <script src="/static/theme.js"></script>
   <title>Life Inbox</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -318,13 +318,12 @@
             <div class="cal-dash-header-zone">
               <div class="cal-brand-row">
                 <h2 class="cal-brand-title">Life Inbox</h2>
-                <span class="cal-sync-pill mono"><span class="cal-sync-dot"></span> AI Active</span>
+                <span id="aiStatusPill" class="cal-sync-pill mono" hidden><span class="cal-sync-dot"></span> <span id="aiStatusText">AI Active</span></span>
               </div>
               
               <!-- Write a note form -->
               <form class="cal-note-composer" onsubmit="dashAddNote(event)">
                 <div class="cal-input-wrap">
-                  <span class="cal-input-icon">✍️</span>
                   <input id="calNoteInput" type="text" placeholder="Write a note..." maxlength="1000" autocomplete="off" required />
                 </div>
                 <button id="calNoteAddBtn" type="submit" class="cal-add-btn">Add</button>
@@ -333,10 +332,9 @@
               <!-- Search or ask bar -->
               <form class="cal-search-composer" onsubmit="dashSearchAsk(event)">
                 <div class="cal-input-wrap">
-                  <span class="cal-input-icon">🔍</span>
                   <input id="calSearchInput" type="search" placeholder="Search or ask your notes..." maxlength="500" autocomplete="off" required />
                 </div>
-                <button id="calSearchBtn" type="submit" class="cal-search-btn">Ask ↵</button>
+                <button id="calSearchBtn" type="submit" class="cal-search-btn">Ask</button>
               </form>
 
               <!-- Search/Ask Result Drawer -->
@@ -360,7 +358,7 @@
                 <div class="cal-box-header">
                   <div class="cal-box-title-group">
                     <span class="cal-indicator-dot indigo"></span>
-                    <h3>Due today <span id="todayCountBadge" class="cal-count-pill mono">(3)</span></h3>
+                    <h3>Due today <span id="todayCountBadge" class="cal-count-pill mono">(0)</span></h3>
                   </div>
                 </div>
                 <div class="cal-box-body">
@@ -375,7 +373,7 @@
                 <div class="cal-box-header">
                   <div class="cal-box-title-group">
                     <span class="cal-indicator-dot rose"></span>
-                    <h3>Overdue <span id="overdueCountBadge" class="cal-count-pill rose mono">(2)</span></h3>
+                    <h3>Overdue <span id="overdueCountBadge" class="cal-count-pill rose mono">(0)</span></h3>
                   </div>
                 </div>
                 <div class="cal-box-body">
@@ -404,7 +402,7 @@
               <div class="cal-box cal-box-pinned">
                 <div class="cal-box-header">
                   <div class="cal-box-title-group">
-                    <span class="cal-star-icon">★</span>
+                    <span class="cal-star-icon" aria-hidden="true"></span>
                     <h3>Pinned</h3>
                   </div>
                   <button type="button" class="cal-pin-add-btn" onclick="promptAddPin()" title="Pin a thought">+</button>
@@ -432,8 +430,6 @@
               </ul>
             </div>
 
-            <!-- Hidden container for loadDashboard compatibility if needed -->
-            <div id="dashboard" hidden></div>
           </div>
 
           <!-- Right Calendar Sidebar (30%) -->
@@ -454,7 +450,7 @@
               <button type="button" class="cal-month-arrow" onclick="navMonth(-1)" aria-label="Previous month" title="Previous month">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
               </button>
-              <h3 id="calMonthTitle" class="cal-month-name">November 2026</h3>
+              <h3 id="calMonthTitle" class="cal-month-name"></h3>
               <button type="button" class="cal-month-arrow" onclick="navMonth(1)" aria-label="Next month" title="Next month">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
               </button>
@@ -477,10 +473,10 @@
             <div class="cal-day-agenda">
               <div class="cal-agenda-head">
                 <div class="cal-day-heading-wrap">
-                  <span id="calSelectedDayTitle" class="cal-day-heading">Thu 12</span>
+                  <span id="calSelectedDayTitle" class="cal-day-heading"></span>
                   <span id="calTodayTag" class="cal-today-tag mono">TODAY</span>
                 </div>
-                <span id="calSelectedDayPending" class="cal-day-pending mono">3 pending</span>
+                <span id="calSelectedDayPending" class="cal-day-pending mono">0 pending</span>
               </div>
               <ul id="calSelectedDayList" class="cal-agenda-checklist">
                 <!-- Checkable tasks for selected day -->
@@ -572,11 +568,11 @@
           <div style="display:flex; align-items:center; gap:6px;">
             <span class="mono eyebrow-sm" style="color:var(--text-3)">Type:</span>
             <button type="button" class="chip active entity-type-chip" onclick="filterEntitiesByType('')">All</button>
-            <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('person')">👤 People</button>
-            <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('place')">📍 Places</button>
-            <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('organization')">🏢 Organizations</button>
+            <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('person')">People</button>
+            <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('place')">Places</button>
+            <button type="button" class="chip entity-type-chip" onclick="filterEntitiesByType('organization')">Organizations</button>
           </div>
-          <button type="button" class="secondary" style="margin-left:auto" onclick="scanAllNotesForEntities()">⚡ Extract Entities</button>
+          <button type="button" class="secondary" style="margin-left:auto" onclick="scanAllNotesForEntities()">Extract Entities</button>
         </div>
 
         <!-- Interactive Timeline Scrubber & Dual Range Bar -->
@@ -587,14 +583,13 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 Timeline Window:
               </span>
-              <span id="timelineRangeDisplay" class="timeline-range-badge mono">All Time (Nov 2025 – Nov 2026)</span>
+              <span id="timelineRangeDisplay" class="timeline-range-badge mono">All Time</span>
             </div>
             <div class="timeline-quick-pills">
               <button type="button" class="chip active entity-time-chip" onclick="setTimelinePreset('all')">All Time</button>
-              <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('sep2026')">Sep 2026 (Jaipur Trip)</button>
               <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('30d')">Past 30 Days</button>
               <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('90d')">Past 90 Days</button>
-              <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('thisyear')">Year 2026</button>
+              <button type="button" class="chip entity-time-chip" onclick="setTimelinePreset('thisyear')">This year</button>
             </div>
           </div>
 
@@ -621,12 +616,12 @@
             <div class="timeline-dates-wrap">
               <label class="timeline-date-field">
                 <span class="mono eyebrow-xs">Start Date</span>
-                <input type="date" id="timelineDateFrom" value="2025-11-01" min="2025-11-01" max="2026-11-12" onchange="onTimelineDateInputChange()">
+                <input type="date" id="timelineDateFrom"  onchange="onTimelineDateInputChange()">
               </label>
               <span class="timeline-sep">&rarr;</span>
               <label class="timeline-date-field">
                 <span class="mono eyebrow-xs">End Date</span>
-                <input type="date" id="timelineDateTo" value="2026-11-12" min="2025-11-01" max="2026-11-12" onchange="onTimelineDateInputChange()">
+                <input type="date" id="timelineDateTo"  onchange="onTimelineDateInputChange()">
               </label>
               <button type="button" class="secondary icon-btn" onclick="setTimelinePreset('all')" title="Reset to All Time">&times;</button>
             </div>
@@ -637,9 +632,9 @@
         <!-- Interactive Entity Treemap -->
         <div class="treemap-wrapper">
           <div class="treemap-legend">
-            <span class="legend-pill person">👤 People</span>
-            <span class="legend-pill place">📍 Places</span>
-            <span class="legend-pill organization">🏢 Organizations</span>
+            <span class="legend-pill person">People</span>
+            <span class="legend-pill place">Places</span>
+            <span class="legend-pill organization">Organizations</span>
             <span class="legend-hint">Block area proportional to note mentions in selected window · Click any tile to inspect</span>
           </div>
           <div id="entityTreemap" class="entity-treemap-container" role="region" aria-label="Entities Treemap"></div>
@@ -665,7 +660,7 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
                 AI Profile & Timeline Synthesis
               </span>
-              <button type="button" class="secondary" id="refreshSummaryBtn" onclick="refreshDossierSummary()" style="font-size:11px; padding:2px 8px;">✨ Refresh Summary</button>
+              <button type="button" class="secondary" id="refreshSummaryBtn" onclick="refreshDossierSummary()" style="font-size:11px; padding:2px 8px;">Refresh Summary</button>
             </div>
             <div id="dossierSummaryText" class="dossier-summary-body">
               Synthesizing profile summary from connected notes…
@@ -697,7 +692,7 @@
             <div id="expenseTotalAmount" class="expense-amount">₹0.00</div>
             <div id="expenseMonthLabel" class="muted" style="font-size:13px; margin-top:2px;">All-time receipts</div>
             <button type="button" class="secondary" style="font-size:12px; padding:4px 10px; margin-top:8px; display:inline-flex; align-items:center; gap:6px;" onclick="exportExpensesToCsv()">
-              <span>📥</span> Export Expense CSV
+              Export Expense CSV
             </button>
           </div>
           <div style="flex:2 1 300px;">
@@ -709,7 +704,7 @@
         <!-- Smart Cards Toolbar -->
         <div class="cards-toolbar">
           <div class="cards-search-wrap">
-            <input type="search" id="cardsSearchInput" class="cards-search-input" placeholder="🔍 Search cards by vendor, ingredient, book, contact, title…" oninput="onCardsSearchInput(this.value)">
+            <input type="search" id="cardsSearchInput" class="cards-search-input" placeholder="Search cards by vendor, ingredient, book, contact, title…" oninput="onCardsSearchInput(this.value)">
           </div>
           <div class="cards-sort-wrap">
             <label for="cardsSortSelect" class="cards-sort-label">Sort:</label>
@@ -726,12 +721,12 @@
 
         <div class="feature-bar">
           <button type="button" class="chip active" id="chip-cards-all" onclick="filterCardsByKind('')">All <span id="count-cards-all" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
-          <button type="button" class="chip" id="chip-cards-receipt" onclick="filterCardsByKind('receipt')">🧾 Receipts & Bills <span id="count-cards-receipt" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
-          <button type="button" class="chip" id="chip-cards-recipe" onclick="filterCardsByKind('recipe')">🍳 Recipes <span id="count-cards-recipe" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
-          <button type="button" class="chip" id="chip-cards-book" onclick="filterCardsByKind('book')">📚 Books <span id="count-cards-book" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
-          <button type="button" class="chip" id="chip-cards-contact" onclick="filterCardsByKind('contact')">📇 Contacts <span id="count-cards-contact" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
-          <button type="button" class="chip" id="chip-cards-event" onclick="filterCardsByKind('event')">📅 Events <span id="count-cards-event" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
-          <button type="button" class="secondary" style="margin-left:auto" onclick="convertAllNotesToCards()">✨ Auto-Format Notes into Cards</button>
+          <button type="button" class="chip" id="chip-cards-receipt" onclick="filterCardsByKind('receipt')">Receipts & Bills <span id="count-cards-receipt" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-recipe" onclick="filterCardsByKind('recipe')">Recipes <span id="count-cards-recipe" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-book" onclick="filterCardsByKind('book')">Books <span id="count-cards-book" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-contact" onclick="filterCardsByKind('contact')">Contacts <span id="count-cards-contact" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="chip" id="chip-cards-event" onclick="filterCardsByKind('event')">Events <span id="count-cards-event" class="mono" style="font-size:11px; opacity:0.8;"></span></button>
+          <button type="button" class="secondary" style="margin-left:auto" onclick="convertAllNotesToCards()">Auto-Format Notes into Cards</button>
         </div>
         <p id="cardsStatus" class="status muted" role="status" aria-live="polite"></p>
 
@@ -751,7 +746,7 @@
         <div class="dev-grid">
           <!-- API Tokens Card -->
           <div class="dev-card">
-            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">🔑 API Bearer Tokens</h3>
+            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">API Bearer Tokens</h3>
             <p class="muted" style="font-size:13.5px; margin-bottom:16px;">Generate scoped Bearer tokens (<code>li_...</code>) for scripts and external apps.</p>
             <form onsubmit="createApiToken(event)" style="display:flex; gap:8px; margin-bottom:14px;">
               <input id="tokenNameInput" placeholder="Token name (e.g. My Script)" required style="flex:1" />
@@ -763,7 +758,7 @@
 
           <!-- MCP Server Connector Card -->
           <div class="dev-card">
-            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">🤖 Model Context Protocol (MCP)</h3>
+            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">Model Context Protocol (MCP)</h3>
             <p class="muted" style="font-size:13.5px;">Add this configuration to Claude Desktop (<code>claude_desktop_config.json</code>) or Cursor to let AI agents query your inbox directly.</p>
             <div class="code-block" style="position:relative;">
               <button type="button" class="secondary copy-pill" onclick="copyMcpConfig()">Copy</button>
@@ -785,7 +780,7 @@
 
           <!-- Webhooks Card -->
           <div class="dev-card">
-            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">⚡ Outbound Webhooks</h3>
+            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">Outbound Webhooks</h3>
             <p class="muted" style="font-size:13.5px; margin-bottom:14px;">Receive real-time HTTP POST notifications when new notes or media are captured.</p>
             <form onsubmit="createWebhook(event)" style="display:flex; gap:8px; margin-bottom:14px;">
               <input id="webhookUrlInput" type="url" placeholder="https://example.com/webhook" required style="flex:1" />
@@ -796,7 +791,7 @@
 
           <!-- Privacy & AI Call Audit Log -->
           <div class="dev-card">
-            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">🔒 Privacy & AI Call Audit Log</h3>
+            <h3 style="font-size:1.1rem; color:var(--text); margin-bottom:8px;">Privacy & AI Call Audit Log</h3>
             <p class="muted" style="font-size:13.5px; margin-bottom:12px;">All outgoing prompts have PII (phones, cards, emails, Aadhaar/PAN) masked. Verify recent calls below:</p>
             <div id="aiCallLogList" style="display:flex; flex-direction:column; gap:8px; max-height:260px; overflow-y:auto;"></div>
           </div>
@@ -810,7 +805,7 @@
     <div class="tour-modal app-form-modal">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
         <div>
-          <h3 style="font-size:1.3rem; color:var(--text);">✨ Create Smart Card</h3>
+          <h3 style="font-size:1.3rem; color:var(--text);">Create Smart Card</h3>
           <p class="muted" style="font-size:13px; margin-top:2px;">Add a new typed card with structured fields.</p>
         </div>
         <button type="button" class="secondary icon-btn" onclick="closeNewCardModal()" title="Close">&times;</button>
@@ -821,11 +816,11 @@
           <label style="flex:1 1 180px;">
             Card Type
             <select id="newCardKindSelect" onchange="onNewCardKindChange(this.value)" style="width:100%; margin-top:4px;">
-              <option value="receipt">🧾 Receipt / Bill</option>
-              <option value="recipe">🍳 Recipe</option>
-              <option value="contact">📇 Contact</option>
-              <option value="book">📚 Book</option>
-              <option value="event">📅 Event</option>
+              <option value="receipt">Receipt / Bill</option>
+              <option value="recipe">Recipe</option>
+              <option value="contact">Contact</option>
+              <option value="book">Book</option>
+              <option value="event">Event</option>
             </select>
           </label>
           <label style="flex:2 1 240px;">
@@ -850,7 +845,7 @@
     <div class="tour-modal recipe-cook-modal">
       <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line); padding-bottom:14px; margin-bottom:16px;">
         <div>
-          <div class="feature-badge recipe" style="display:inline-block; margin-bottom:4px;">🍳 COOK MODE</div>
+          <div class="feature-badge recipe" style="display:inline-block; margin-bottom:4px;">COOK MODE</div>
           <h2 id="cookRecipeTitle" style="font-size:1.45rem; color:var(--text); margin:0;">Recipe Title</h2>
           <div id="cookRecipeMeta" class="muted mono" style="font-size:12.5px; margin-top:4px;">Prep: 30 mins · 4 servings</div>
         </div>
@@ -860,7 +855,6 @@
       <!-- Kitchen Timer Widget -->
       <div class="cook-timer-widget">
         <div style="display:flex; align-items:center; gap:10px;">
-          <span style="font-size:1.4rem;">⏱️</span>
           <div>
             <div class="mono" style="font-size:11px; color:var(--indigo-text); text-transform:uppercase;">Kitchen Timer</div>
             <div id="cookTimerDisplay" class="mono" style="font-size:1.8rem; font-weight:700; color:var(--text);">00:00</div>
@@ -897,14 +891,14 @@
 
   <!-- Floating Onboarding Tour & Feature Discovery -->
   <button type="button" id="tourFab" class="tour-floater-btn" onclick="openOnboardingTour()">
-    <span>✨</span> Explore Features & Tour
+    Explore Features & Tour
   </button>
 
   <div id="tourModal" class="tour-modal-backdrop" hidden>
     <div class="tour-modal">
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <div>
-          <h3 style="font-size:1.35rem; color:var(--text);">✨ Life Inbox Feature Guide</h3>
+          <h3 style="font-size:1.35rem; color:var(--text);">Life Inbox Feature Guide</h3>
           <p class="muted" style="font-size:13.5px; margin-top:2px;">Discover what your intelligent second-brain copilot can do:</p>
         </div>
         <button type="button" class="secondary icon-btn" onclick="closeOnboardingTour()" title="Close">&times;</button>
@@ -913,7 +907,7 @@
       <div class="tour-card-list">
         <div class="tour-item">
           <div class="tour-item-info">
-            <strong>🍳 Smart Cards & Receipts</strong>
+            <strong>Smart Cards & Receipts</strong>
             <span>Turns unstructured notes into typed recipe, book, contact cards, and tracks monthly expenses from bills.</span>
           </div>
           <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-cards').click()">View Cards</button>
@@ -921,7 +915,7 @@
 
         <div class="tour-item">
           <div class="tour-item-info">
-            <strong>👤 People & Entities Treemap</strong>
+            <strong>People & Entities Treemap</strong>
             <span>Visual treemap scaling entities by note frequency. Click any block to view its connected notes & dossier.</span>
           </div>
           <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-entities').click()">View Treemap</button>
@@ -929,7 +923,7 @@
 
         <div class="tour-item">
           <div class="tour-item-info">
-            <strong>🧠 Meaning-Based Semantic Search</strong>
+            <strong>Meaning-Based Semantic Search</strong>
             <span>Search with completely different words (e.g. "teeth checkup" finds dentist notes) via local embeddings.</span>
           </div>
           <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-ask').click()">Try Ask</button>
@@ -937,7 +931,7 @@
 
         <div class="tour-item">
           <div class="tour-item-info">
-            <strong>🔒 Privacy Shield & Redaction</strong>
+            <strong>Privacy Shield & Redaction</strong>
             <span>Automatically redacts phone numbers, card numbers, and PII before sending prompts to external AI.</span>
           </div>
           <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-developer').click()">Audit Log</button>
@@ -945,7 +939,7 @@
 
         <div class="tour-item">
           <div class="tour-item-info">
-            <strong>🤖 MCP Server & Public API</strong>
+            <strong>MCP Server & Public API</strong>
             <span>Connect Claude Desktop, Cursor, or custom automations directly into your personal inbox.</span>
           </div>
           <button type="button" class="secondary" onclick="closeOnboardingTour(); document.getElementById('tab-developer').click()">Get MCP Config</button>

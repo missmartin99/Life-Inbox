@@ -1,11 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="dark" />
-  <meta name="theme-color" content="#0A0A0A" />
+  <meta name="color-scheme" content="light" />
+  <meta name="theme-color" content="#F6F6F8" />
   <script src="/static/theme.js"></script>
+  <script>
+    // The sign-in page is always light, whatever the last person here chose.
+    document.documentElement.setAttribute('data-theme', 'light');
+  </script>
   <title>Sign in · Life Inbox</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
