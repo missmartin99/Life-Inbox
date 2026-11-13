@@ -1159,6 +1159,11 @@ def calendar_confirm(payload: CalendarConfirmRequest):
     }
 
 
+from app.assistant_routes import router as assistant_router  # noqa: E402
+
+app.include_router(assistant_router)
+
+
 @app.get("/api/topics", response_model=List[Topic])
 def get_topics(include_archived: bool = Query(False)):
     try:

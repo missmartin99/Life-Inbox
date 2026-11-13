@@ -178,6 +178,12 @@
     lfo.stop(start + duration + 0.05);
   }
 
+  // Jin's own sounds go quiet while her voice (cat_voice.js) is in charge.
+  function catSound(play) {
+    if (window.JinVoice && window.JinVoice.quiet) return;
+    withSound(play);
+  }
+
   function withSound(play) {
     audio.ready().then(ctx => { if (ctx) play(ctx); });
   }
@@ -547,7 +553,7 @@
     wake(3000);
     flash('yawn', 1600);
     say(catState.happy < 25 ? 'hmph… *yawn*' : '*yaaawn*', 1500);
-    if (soundOn) withSound(yawnSound);
+    if (soundOn) catSound(yawnSound);
     const now = performance.now();
     if (now - lastBoop > 4000) {
       lastBoop = now;
@@ -561,7 +567,7 @@
     flash('purring', 2000);
     hearts(catState.happy >= 90 ? 6 : 4);
     say(catState.happy >= 95 ? 'purrrr… ♥' : 'purrrr… zz', 1900);
-    if (soundOn) withSound(() => purr(1.9));
+    if (soundOn) catSound(() => purr(1.9));
     addHappy(8);
   }
 
@@ -599,7 +605,7 @@
       flash('eating', 1300);
       say('nom nom', 1400);
       if (soundOn) {
-        withSound(() => {
+        catSound(() => {
           bell(1046.5, {gain: 0.07, decay: 0.5});
           bell(1318.5, {when: 0.14, gain: 0.06, decay: 0.6});
         });
@@ -618,7 +624,7 @@
     flash('playing', 3200);
     say('!', 900);
     if (soundOn) {
-      withSound(() => {
+      catSound(() => {
         [[0.85, 1174.66], [1.55, 1318.5], [2.25, 1567.98]].forEach(([when, freq]) => {
           bell(freq, {when, gain: 0.05, decay: 0.35, pan: -0.3});
         });
@@ -695,7 +701,7 @@
     flash('happy', 1400);
     hearts(3);
     say(`I'm ${name} now!`, 2000);
-    if (soundOn) withSound(chime);
+    if (soundOn) catSound(chime);
   });
 
   cat.addEventListener('contextmenu', event => {
