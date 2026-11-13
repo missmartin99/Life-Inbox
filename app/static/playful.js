@@ -413,15 +413,9 @@
     renderMood();
   }, 60000);
 
-  let bubbleTimer = 0;
-  function say(text, ms = 1800) {
-    bubble.textContent = text;
-    bubble.classList.remove('show');
-    void bubble.offsetWidth;
-    bubble.classList.add('show');
-    window.clearTimeout(bubbleTimer);
-    bubbleTimer = window.setTimeout(() => bubble.classList.remove('show'), ms);
-  }
+  // Jin no longer shows little caption bubbles ("purrrr…", "nom nom", …).
+  // Her voice replies and microphone messages (cat_voice.js) still use the bubble.
+  function say() {}
 
   const flashTimers = new Map();
   function flash(className, ms) {
