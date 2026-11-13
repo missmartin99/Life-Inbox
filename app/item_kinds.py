@@ -20,13 +20,10 @@ import logging
 import re
 
 from app.expenses import CATEGORIES, find_amount, find_date
-from app.organizer import extract_json_object
-from app.privacy import ai_is_configured, ask_ai
+from app.privacy import ai_is_configured, ask_ai, extract_json_object
 
 logger = logging.getLogger(__name__)
 
-# Each kind and its fields. "list" fields hold several short strings,
-# "text" fields hold one string, "number" fields hold a number.
 KIND_FIELDS = {
     "recipe": {"name": "text", "ingredients": "list", "steps": "list", "time": "text"},
     "book": {"title": "text", "author": "text", "quotes": "list", "status": "text"},

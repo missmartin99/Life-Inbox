@@ -84,6 +84,7 @@ from app.database import (
     get_item_insight,
     get_latest_successful_analysis,
     get_organization_dashboard,
+    get_task_by_id,
     init_db,
     list_items_from_db,
     list_notes_from_db,
@@ -1060,11 +1061,7 @@ def calendar_preview(payload: CalendarPreviewRequest):
 
     from app.attention.dates import configured_timezone, parse_timing_phrase
 
-    task = None
-    for candidate in list_tasks_from_db(status_filter="all"):
-        if candidate["id"] == payload.task_id:
-            task = candidate
-            break
+    task = get_task_by_id(payload.task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found.")
 

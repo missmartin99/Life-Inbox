@@ -7,7 +7,11 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from app.capture.storage import MAX_AUDIO_BYTES
+from app.capture.storage import (
+    MAX_AUDIO_BYTES,
+    normalize_filename,
+    title_from_filename,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +40,6 @@ _SIGNATURES: list[tuple[bytes, str, str]] = [
     (b"OggS", "audio/ogg", ".ogg"),
     (b"\x1aE\xdf\xa3", "audio/webm", ".webm"),  # EBML / Matroska / WebM
 ]
-
-
-def _normalize_filename(filename: str) -> str:
-    name = Path(filename or "voice-note.webm").name
-    if not name or name in {".", ".."}:
-        return "voice-note.webm"
-    return name
 
 
 def _sniff_audio(data: bytes, declared_ext: str) -> tuple[str, str]:
@@ -75,7 +72,7 @@ def validate_audio_upload(
     data: bytes,
 ) -> tuple[str, str, str]:
     """Validate upload; return (safe_filename, mime, extension)."""
-    safe_name = _normalize_filename(filename)
+    safe_name = normalize_filename(filename, "voice-note.webm")
     suffix = Path(safe_name).suffix.lower()
     if suffix and suffix not in ALLOWED_AUDIO_EXTENSIONS:
         raise ValueError(
@@ -101,11 +98,6 @@ def validate_audio_upload(
     if not suffix:
         safe_name = f"{Path(safe_name).stem}{detected_ext}"
     return safe_name, detected_mime, detected_ext
-
-
-def _title_from_filename(filename: str) -> str:
-    stem = Path(filename).stem.strip()
-    return stem or "Voice note"
 
 
 def _transcription_model() -> str:
@@ -163,7 +155,7 @@ def transcribe_audio(
 
         client = OpenAI()
         model = _transcription_model()
-        safe_name = _normalize_filename(original_filename)
+        safe_name = normalize_filename(original_filename, "voice-note.webm")
         result = client.audio.transcriptions.create(
             model=model,
             file=(safe_name, data, mime_type or "application/octet-stream"),
@@ -203,7 +195,7 @@ def process_voice_bytes(
         original_filename=original_filename,
         mime_type=mime_type,
     )
-    title = _title_from_filename(original_filename)
+    title = title_from_filename(original_filename, "Voice note")
     transcript = transcription["text"]
     note = transcription.get("note")
 

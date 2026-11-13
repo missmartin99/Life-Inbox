@@ -81,6 +81,18 @@ def store_audio_bytes(data: bytes, extension: str) -> str:
     return relative
 
 
+def normalize_filename(filename: str, default: str = "file") -> str:
+    name = Path(filename or default).name
+    if not name or name in {".", ".."}:
+        return default
+    return name
+
+
+def title_from_filename(filename: str, default: str = "File capture") -> str:
+    stem = Path(filename).stem.strip()
+    return stem or default
+
+
 def resolve_storage_path(relative_path: str) -> Path:
     root = upload_root().resolve()
     target = (root / relative_path).resolve()

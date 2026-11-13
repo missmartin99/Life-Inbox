@@ -68,7 +68,7 @@ def get_vectors(texts):
     from app.database import load_cached_vectors, save_cached_vectors
 
     hashes = [text_hash(t) for t in texts]
-    cached = load_cached_vectors(hashes, MODEL_NAME)  # {hash: vector}
+    cached = load_cached_vectors(hashes, MODEL_NAME)
 
     missing = [(h, t) for h, t in zip(hashes, texts) if h not in cached]
     if missing:
@@ -106,7 +106,7 @@ def meaning_scores(query, passage_texts):
     """0..1 meaning score between the query and each passage, or None if off."""
     if not embeddings_enabled() or not passage_texts:
         return None
-    query_vector = embed_texts([query])  # queries are not cached
+    query_vector = embed_texts([query])
     passage_vectors = get_vectors(passage_texts)
     if query_vector is None or passage_vectors is None:
         return None

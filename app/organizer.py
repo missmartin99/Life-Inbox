@@ -2,22 +2,11 @@ import json
 import logging
 import re
 
-from app.privacy import HIDDEN_TEXT, ai_is_configured, ask_ai
+from app.privacy import HIDDEN_TEXT, ai_is_configured, ask_ai, extract_json_object
 from app.schemas import AnalysisResult
 
 
 logger = logging.getLogger(__name__)
-
-
-def extract_json_object(raw: str) -> dict:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.replace("```json", "").replace("```", "").strip()
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("No JSON object found in model output")
-    return json.loads(raw[start:end + 1])
 
 
 def priority_for_text(text: str) -> str:

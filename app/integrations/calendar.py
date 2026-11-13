@@ -9,10 +9,6 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 
-class CalendarNotConfiguredError(RuntimeError):
-    pass
-
-
 class CalendarWriteBlockedError(RuntimeError):
     """Raised when a real write would be required but is not authorized."""
 

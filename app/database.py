@@ -141,8 +141,8 @@ class EntityRecord(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     name = Column(Text, nullable=False)
-    name_key = Column(Text, nullable=False)  # lower-case name, for matching
-    entity_type = Column(Text, nullable=False)  # person | place | organization
+    name_key = Column(Text, nullable=False)
+    entity_type = Column(Text, nullable=False)
     created_at = Column(Text, nullable=False)
 
 
@@ -166,7 +166,7 @@ class EmbeddingCacheRecord(Base):
 
     text_hash = Column(Text, primary_key=True)
     model = Column(Text, primary_key=True)
-    vector = Column(Text, nullable=False)  # JSON list of floats
+    vector = Column(Text, nullable=False)
     created_at = Column(Text, nullable=False)
 
 
@@ -184,7 +184,7 @@ class FlashcardRecord(Base):
     question = Column(Text, nullable=False)
     answer = Column(Text, nullable=False)
     box = Column(Integer, nullable=False, default=0, server_default="0")
-    due_date = Column(Text, nullable=False)  # YYYY-MM-DD
+    due_date = Column(Text, nullable=False)
     created_at = Column(Text, nullable=False)
     last_reviewed_at = Column(Text, nullable=True)
 
@@ -1234,6 +1234,15 @@ def list_tasks_from_db(status_filter: str = TASK_OPEN) -> list[dict]:
         return [_task_to_dict(session, task) for task in tasks]
 
 
+def get_task_by_id(task_id: int) -> Optional[dict]:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        task = session.get(TaskRecord, task_id)
+        if task is None or task.owner_user_id != owner_id:
+            return None
+        return _task_to_dict(session, task)
+
+
 def set_task_status(task_id: int, task_status: str) -> Optional[dict]:
     if task_status not in TASK_STATUSES:
         raise ValueError("Unsupported task status")
@@ -1250,16 +1259,17 @@ def set_task_status(task_id: int, task_status: str) -> Optional[dict]:
         return _task_to_dict(session, task)
 
 
-def add_pdf_item_to_db(
+def add_file_item_to_db(
+    item_type: str,
     original_filename: str,
     storage_path: str,
     mime_type: str,
 ) -> dict:
-    """Persist uploaded PDF metadata before text extraction."""
+    """Persist uploaded file item metadata before background extraction."""
     now = datetime.now(timezone.utc).isoformat()
     with SessionLocal() as session:
         item = InboxItemRecord(
-            item_type=PDF_ITEM_TYPE,
+            item_type=item_type,
             original_filename=original_filename,
             storage_path=storage_path,
             mime_type=mime_type,
@@ -1268,6 +1278,48 @@ def add_pdf_item_to_db(
             created_at=now,
         )
         session.add(item)
+        session.commit()
+        return _item_to_dict(item)
+
+
+def add_pdf_item_to_db(original_filename: str, storage_path: str, mime_type: str) -> dict:
+    return add_file_item_to_db(PDF_ITEM_TYPE, original_filename, storage_path, mime_type)
+
+
+def add_image_item_to_db(original_filename: str, storage_path: str, mime_type: str) -> dict:
+    return add_file_item_to_db(IMAGE_ITEM_TYPE, original_filename, storage_path, mime_type)
+
+
+def add_voice_item_to_db(original_filename: str, storage_path: str, mime_type: str) -> dict:
+    return add_file_item_to_db(VOICE_ITEM_TYPE, original_filename, storage_path, mime_type)
+
+
+def complete_item_processing(
+    item_id: int,
+    *,
+    title: str,
+    raw_text: str,
+    extracted_text: str,
+    mime_type: Optional[str] = None,
+    ai_description: Optional[str] = None,
+    final_url: Optional[str] = None,
+) -> Optional[dict]:
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None:
+            return None
+        item.title = title
+        item.raw_text = raw_text
+        item.extracted_text = extracted_text
+        if mime_type is not None:
+            item.mime_type = mime_type
+        if ai_description is not None:
+            item.ai_description = ai_description
+        if final_url is not None:
+            item.source_url = final_url
+        item.processing_status = STATUS_READY
+        item.error_message = None
+        item.updated_at = datetime.now(timezone.utc).isoformat()
         session.commit()
         return _item_to_dict(item)
 
@@ -1280,41 +1332,13 @@ def complete_pdf_item_processing(
     extracted_text: str,
     mime_type: Optional[str],
 ) -> Optional[dict]:
-    with SessionLocal() as session:
-        item = session.get(InboxItemRecord, item_id)
-        if item is None:
-            return None
-        item.title = title
-        item.raw_text = raw_text
-        item.extracted_text = extracted_text
-        item.mime_type = mime_type
-        item.processing_status = STATUS_READY
-        item.error_message = None
-        item.updated_at = datetime.now(timezone.utc).isoformat()
-        session.commit()
-        return _item_to_dict(item)
-
-
-def add_image_item_to_db(
-    original_filename: str,
-    storage_path: str,
-    mime_type: str,
-) -> dict:
-    """Persist uploaded image metadata before OCR/description."""
-    now = datetime.now(timezone.utc).isoformat()
-    with SessionLocal() as session:
-        item = InboxItemRecord(
-            item_type=IMAGE_ITEM_TYPE,
-            original_filename=original_filename,
-            storage_path=storage_path,
-            mime_type=mime_type,
-            processing_status=STATUS_CAPTURED,
-            owner_user_id=require_owner_id(),
-            created_at=now,
-        )
-        session.add(item)
-        session.commit()
-        return _item_to_dict(item)
+    return complete_item_processing(
+        item_id,
+        title=title,
+        raw_text=raw_text,
+        extracted_text=extracted_text,
+        mime_type=mime_type,
+    )
 
 
 def complete_image_item_processing(
@@ -1326,42 +1350,14 @@ def complete_image_item_processing(
     ai_description: str,
     mime_type: Optional[str],
 ) -> Optional[dict]:
-    with SessionLocal() as session:
-        item = session.get(InboxItemRecord, item_id)
-        if item is None:
-            return None
-        item.title = title
-        item.raw_text = raw_text
-        item.extracted_text = extracted_text
-        item.ai_description = ai_description
-        item.mime_type = mime_type
-        item.processing_status = STATUS_READY
-        item.error_message = None
-        item.updated_at = datetime.now(timezone.utc).isoformat()
-        session.commit()
-        return _item_to_dict(item)
-
-
-def add_voice_item_to_db(
-    original_filename: str,
-    storage_path: str,
-    mime_type: str,
-) -> dict:
-    """Persist uploaded voice note metadata before transcription."""
-    now = datetime.now(timezone.utc).isoformat()
-    with SessionLocal() as session:
-        item = InboxItemRecord(
-            item_type=VOICE_ITEM_TYPE,
-            original_filename=original_filename,
-            storage_path=storage_path,
-            mime_type=mime_type,
-            processing_status=STATUS_CAPTURED,
-            owner_user_id=require_owner_id(),
-            created_at=now,
-        )
-        session.add(item)
-        session.commit()
-        return _item_to_dict(item)
+    return complete_item_processing(
+        item_id,
+        title=title,
+        raw_text=raw_text,
+        extracted_text=extracted_text,
+        ai_description=ai_description,
+        mime_type=mime_type,
+    )
 
 
 def complete_voice_item_processing(
@@ -1372,19 +1368,13 @@ def complete_voice_item_processing(
     extracted_text: str,
     mime_type: Optional[str],
 ) -> Optional[dict]:
-    with SessionLocal() as session:
-        item = session.get(InboxItemRecord, item_id)
-        if item is None:
-            return None
-        item.title = title
-        item.raw_text = raw_text
-        item.extracted_text = extracted_text
-        item.mime_type = mime_type
-        item.processing_status = STATUS_READY
-        item.error_message = None
-        item.updated_at = datetime.now(timezone.utc).isoformat()
-        session.commit()
-        return _item_to_dict(item)
+    return complete_item_processing(
+        item_id,
+        title=title,
+        raw_text=raw_text,
+        extracted_text=extracted_text,
+        mime_type=mime_type,
+    )
 
 
 def update_item_extracted_text(
@@ -1449,21 +1439,14 @@ def complete_url_item_processing(
     mime_type: Optional[str],
     final_url: Optional[str] = None,
 ) -> Optional[dict]:
-    with SessionLocal() as session:
-        item = session.get(InboxItemRecord, item_id)
-        if item is None:
-            return None
-        item.title = title
-        item.raw_text = raw_text
-        item.extracted_text = raw_text
-        item.mime_type = mime_type
-        if final_url:
-            item.source_url = final_url
-        item.processing_status = STATUS_READY
-        item.error_message = None
-        item.updated_at = datetime.now(timezone.utc).isoformat()
-        session.commit()
-        return _item_to_dict(item)
+    return complete_item_processing(
+        item_id,
+        title=title,
+        raw_text=raw_text,
+        extracted_text=raw_text,
+        mime_type=mime_type,
+        final_url=final_url,
+    )
 
 
 def fail_item_processing(item_id: int, error_message: str) -> Optional[dict]:
@@ -2154,7 +2137,7 @@ def save_item_entities(item_id: int, entities: list) -> Optional[list]:
                     created_at=now,
                 )
                 session.add(entity)
-                session.flush()  # gives the new entity its id
+                session.flush()
             session.add(ItemEntityRecord(item_id=item_id, entity_id=entity.id))
             saved.append(_entity_to_dict(entity))
         session.commit()
@@ -2255,17 +2238,14 @@ def load_cached_vectors(hashes: list, model: str) -> dict:
 
 
 def save_cached_vectors(vectors: dict, model: str) -> None:
-    from app.retrieval.embeddings import vector_to_text
-
     now = datetime.now(timezone.utc).isoformat()
     with SessionLocal() as session:
         for text_hash, vector in vectors.items():
-            # merge = insert, or update if this hash is already there
             session.merge(
                 EmbeddingCacheRecord(
                     text_hash=text_hash,
                     model=model,
-                    vector=vector_to_text(vector),
+                    vector=json.dumps([round(x, 6) for x in vector]),
                     created_at=now,
                 )
             )
@@ -2321,7 +2301,7 @@ def list_due_flashcards(today: str) -> list:
             select(FlashcardRecord)
             .where(
                 FlashcardRecord.owner_user_id == owner_id,
-                FlashcardRecord.due_date <= today,  # YYYY-MM-DD sorts like a date
+                FlashcardRecord.due_date <= today,
             )
             .order_by(FlashcardRecord.due_date, FlashcardRecord.id)
         )

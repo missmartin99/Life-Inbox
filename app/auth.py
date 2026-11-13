@@ -75,11 +75,6 @@ def get_current_user(
     request: Request,
     life_inbox_session: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
 ) -> dict:
-    # Never accept X-User-Id / query user_id as identity.
-    if "x-user-id" in {k.lower() for k in request.headers.keys()}:
-        # Ignore spoof header completely.
-        pass
-
     token = life_inbox_session
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required.")

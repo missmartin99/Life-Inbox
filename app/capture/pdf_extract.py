@@ -8,7 +8,7 @@ from typing import Optional
 
 from pypdf import PdfReader
 
-from app.capture.storage import MAX_PDF_BYTES
+from app.capture.storage import MAX_PDF_BYTES, normalize_filename, title_from_filename
 
 PDF_MAGIC = b"%PDF"
 ALLOWED_PDF_MIMES = {
@@ -17,20 +17,13 @@ ALLOWED_PDF_MIMES = {
 }
 
 
-def _normalize_filename(filename: str) -> str:
-    name = Path(filename or "document.pdf").name
-    if not name or name in {".", ".."}:
-        return "document.pdf"
-    return name
-
-
 def validate_pdf_upload(
     filename: str,
     content_type: Optional[str],
     data: bytes,
 ) -> str:
     """Validate upload bytes; return sanitized original filename."""
-    safe_name = _normalize_filename(filename)
+    safe_name = normalize_filename(filename, "document.pdf")
     if not safe_name.lower().endswith(".pdf"):
         raise ValueError("Only .pdf files are allowed.")
 
@@ -53,11 +46,6 @@ def validate_pdf_upload(
             )
 
     return safe_name
-
-
-def _title_from_filename(filename: str) -> str:
-    stem = Path(filename).stem.strip()
-    return stem or "PDF document"
 
 
 def extract_pdf_text(
@@ -92,7 +80,7 @@ def extract_pdf_text(
             "No extractable text found. This PDF may be scanned or image-only."
         )
 
-    title = meta_title or _title_from_filename(original_filename or "document.pdf")
+    title = meta_title or title_from_filename(original_filename or "document.pdf", "PDF document")
     return {
         "title": title,
         "raw_text": extracted,

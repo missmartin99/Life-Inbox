@@ -6,8 +6,7 @@ import json
 import logging
 from typing import Optional
 
-from app.organizer import extract_json_object
-from app.privacy import ai_is_configured, ask_ai
+from app.privacy import ai_is_configured, ask_ai, extract_json_object
 from app.retrieval.search import RankedPassage, search_passages
 from app.retrieval.task_questions import answer_task_question
 

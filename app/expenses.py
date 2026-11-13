@@ -35,13 +35,13 @@ def find_date(text):
     match = DATE_RE.search(text)
     if not match:
         return None
-    if match.group(4):  # already YYYY-MM-DD
+    if match.group(4):
         day, month, year = match.group(6), match.group(5), match.group(4)
     else:
         day, month, year = match.group(1), match.group(2), match.group(3)
     try:
         return datetime(int(year), int(month), int(day)).strftime("%Y-%m-%d")
-    except ValueError:  # e.g. 31/02/2026
+    except ValueError:
         return None
 
 

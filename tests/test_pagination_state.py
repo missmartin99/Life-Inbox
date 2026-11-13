@@ -20,33 +20,6 @@ NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(NODE is None, reason="node is required for JS helper tests")
 
 
-@pytest.fixture()
-def client(tmp_path, monkeypatch):
-    """Create an app client backed only by a per-test SQLite database."""
-    import importlib
-    import sys
-
-    test_db_path = tmp_path / "life_inbox_test.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{test_db_path}")
-    monkeypatch.setenv("LIFE_INBOX_AUTO_CREATE_TABLES", "1")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
-    sys.modules.pop("app.database", None)
-    sys.modules.pop("app.main", None)
-    main = importlib.import_module("app.main")
-    database = importlib.import_module("app.database")
-
-    assert database.engine.url.database == str(test_db_path)
-    from fastapi.testclient import TestClient
-
-    with TestClient(main.app) as test_client:
-        yield test_client
-
-    database.engine.dispose()
-    sys.modules.pop("app.main", None)
-    sys.modules.pop("app.database", None)
-
-
 def run_helper(script: str) -> dict:
     """Run a Node script that requires the helper and prints JSON on stdout."""
     completed = subprocess.run(

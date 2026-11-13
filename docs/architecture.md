@@ -17,12 +17,11 @@
 | `app/database.py` | Models, persistence helpers, fingerprints, task upsert |
 | `app/schemas.py` | Request/response and analysis contracts |
 | `app/organizer.py` | OpenAI + fallback organization |
-| `app/capture/` | Rich capture (URL, PDF, image, voice, lifecycle) |
+| `app/capture/` | Rich capture (URL, PDF, image, voice, filesystem storage) |
 | `app/retrieval/` | Keyword + local TF-IDF search, grounded Ask My Inbox |
 | `app/attention/` | Timing parse, attention buckets, briefing helpers |
 | `app/integrations/` | Replaceable Calendar adapter (mock / preview-only Google) |
 | `app/auth.py` / `app/config.py` | Session auth + startup config validation |
-| `app/storage_backend.py` | Upload storage abstraction (local FS default) |
 | `app/templates` / `app/static` | Browser UI |
 
 ## Data model (current)

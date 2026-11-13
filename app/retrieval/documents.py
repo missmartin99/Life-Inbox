@@ -86,14 +86,3 @@ def load_passages(
                     )
                 )
     return passages
-
-
-def passages_to_dict(passage: TextPassage) -> dict:
-    return {
-        "item_id": passage.item_id,
-        "item_type": passage.item_type,
-        "title": passage.title,
-        "passage": passage.passage,
-        "source_kind": passage.source_kind,
-        "preview_url": passage.preview_url,
-    }

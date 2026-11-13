@@ -18,8 +18,7 @@ mentions it, so we can show a page like "everything about Dr. Mehta".
 import logging
 import re
 
-from app.organizer import extract_json_object
-from app.privacy import ai_is_configured, ask_ai
+from app.privacy import ai_is_configured, ask_ai, extract_json_object
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,11 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from app.capture.storage import MAX_IMAGE_BYTES
+from app.capture.storage import (
+    MAX_IMAGE_BYTES,
+    normalize_filename,
+    title_from_filename,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +35,6 @@ _SIGNATURES: list[tuple[bytes, str, str]] = [
 ]
 
 
-def _normalize_filename(filename: str) -> str:
-    name = Path(filename or "image.png").name
-    if not name or name in {".", ".."}:
-        return "image.png"
-    return name
-
-
 def _sniff_image(data: bytes) -> tuple[str, str]:
     if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WEBP":
         return "image/webp", ".webp"
@@ -53,7 +50,7 @@ def validate_image_upload(
     data: bytes,
 ) -> tuple[str, str, str]:
     """Validate upload; return (safe_filename, detected_mime, storage_extension)."""
-    safe_name = _normalize_filename(filename)
+    safe_name = normalize_filename(filename, "image.png")
     suffix = Path(safe_name).suffix.lower()
     if suffix and suffix not in ALLOWED_IMAGE_EXTENSIONS:
         raise ValueError(
@@ -82,11 +79,6 @@ def validate_image_upload(
         pass
 
     return safe_name, detected_mime, detected_ext
-
-
-def _title_from_filename(filename: str) -> str:
-    stem = Path(filename).stem.strip()
-    return stem or "Image capture"
 
 
 def make_thumbnail_bytes(data: bytes, *, max_size: int = 320) -> bytes:
@@ -250,7 +242,7 @@ def process_image_bytes(
         ocr_text=ocr["text"],
         ocr_note=ocr.get("note"),
     )
-    title = _title_from_filename(original_filename)
+    title = title_from_filename(original_filename, "Image capture")
     ocr_text = ocr["text"]
     ai_description = description["description"]
 
