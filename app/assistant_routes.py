@@ -14,7 +14,13 @@ from app.assistant import (
     SpeechError,
     classify_utterance,
     has_devanagari,
+    humanize_answer,
     is_on_topic,
+    parse_reminder,
+    pick,
+    saved_reply,
+    _ANSWER_FAILED, _DIDNT_CATCH, _REMINDER_NO_TIME, _REMINDER_SET,
+    _SAVE_FAILED, _WHAT_TO_SAVE,
     speech_configured,
     synthesize_speech,
     to_speech,
@@ -26,6 +32,7 @@ from app.assistant_actions import match_task, parse_task_command, snooze_date
 from app.database import (
     TASK_COMPLETED,
     add_item_to_db,
+    add_reminder_task,
     list_tasks_from_db,
     set_task_status,
     snooze_task_in_db,
@@ -128,7 +135,7 @@ def assistant_voice(
 
     if intent == "capture":
         if len(cleaned) < 2:
-            reply = "What would you like me to save?"
+            reply = pick(_WHAT_TO_SAVE)
             return {
                 "transcript": transcript, "intent": "clarify", "reply": reply,
                 "speech": reply, "citations": [], "saved_item_id": None,
@@ -137,25 +144,47 @@ def assistant_voice(
             item = add_item_to_db(cleaned)
         except Exception as exc:
             logger.exception("Assistant failed to save note")
-            raise HTTPException(
-                status_code=500, detail="I couldn't save that. Please try again."
-            ) from exc
-        speech = (
-            "ठीक है, मैंने इसे सेव कर लिया है।"
-            if has_devanagari(transcript)
-            else "Okay, I saved that to your inbox."
-        )
+            raise HTTPException(status_code=500, detail=_SAVE_FAILED) from exc
+
+        reminder = None
+        task = None
+        try:
+            reminder = parse_reminder(cleaned)
+            if reminder:
+                task = add_reminder_task(
+                    item["id"], reminder["task"], reminder["when"], reminder["iso"]
+                )
+        except Exception:
+            logger.exception("Assistant saved the note but could not make a reminder")
+            reminder = task = None
+
+        if task is not None:
+            reply = (
+                pick(_REMINDER_SET, spoken=reminder["spoken"])
+                if reminder["when"]
+                else pick(_REMINDER_NO_TIME)
+            )
+            return {
+                "transcript": transcript,
+                "intent": "reminder",
+                "reply": reply,
+                "speech": reply,
+                "citations": [],
+                "saved_item_id": item["id"],
+                "task_id": task["id"],
+            }
+        reply = saved_reply(has_devanagari(transcript))
         return {
             "transcript": transcript,
             "intent": "capture",
-            "reply": f"Saved to your inbox: {cleaned}",
-            "speech": speech,
+            "reply": reply,
+            "speech": reply,
             "citations": [],
             "saved_item_id": item["id"],
         }
 
     if len(cleaned) < 3:
-        reply = "Sorry, I didn't catch that."
+        reply = pick(_DIDNT_CATCH)
         return {
             "transcript": transcript, "intent": "clarify", "reply": reply,
             "speech": reply, "citations": [], "saved_item_id": None,
@@ -164,10 +193,7 @@ def assistant_voice(
         answer = build_grounded_answer(cleaned[:500], item_type=None)
     except Exception as exc:
         logger.exception("Assistant failed to answer")
-        raise HTTPException(
-            status_code=500,
-            detail="I couldn't answer that from your inbox. Please try again.",
-        ) from exc
+        raise HTTPException(status_code=500, detail=_ANSWER_FAILED) from exc
     if (
         answer.get("mode") != "task_board"
         and answer.get("citations")
@@ -186,11 +212,12 @@ def assistant_voice(
         }
         for c in answer.get("citations", [])[:3]
     ]
+    reply, speech = humanize_answer(answer)
     return {
         "transcript": transcript,
         "intent": "ask",
-        "reply": answer["answer"],
-        "speech": to_speech(answer["answer"]),
+        "reply": reply,
+        "speech": speech,
         "confidence": answer.get("confidence"),
         "citations": citations,
         "saved_item_id": None,
