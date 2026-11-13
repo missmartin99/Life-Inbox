@@ -518,19 +518,19 @@ label { display: grid; gap: 6px; font-size: 12px; color: var(--text-3); letter-s
   position: fixed;
   right: 20px;
   bottom: 20px;
-  z-index: 120;
-  display: grid;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column-reverse;
   gap: 10px;
   width: min(380px, calc(100vw - 32px));
   pointer-events: none;
 }
 .toast {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 4px 14px;
-  border-radius: var(--radius-pop);
+  display: flex;
   align-items: center;
-  padding: 14px 16px;
+  gap: 12px;
+  border-radius: var(--radius-pop);
+  padding: 12px 16px;
   background: rgb(var(--glass) / 0.94);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -542,14 +542,60 @@ label { display: grid; gap: 6px; font-size: 12px; color: var(--text-3); letter-s
   opacity: 0;
   translate: 0 16px;
   scale: 0.98;
-  transition: opacity 0.45s var(--ease), translate 0.45s var(--ease), scale 0.45s var(--ease);
+  transition: opacity 0.35s var(--ease), translate 0.35s var(--ease), scale 0.35s var(--ease);
 }
 .toast.in { opacity: 1; translate: 0 0; scale: 1; }
 .toast.out { opacity: 0; translate: 24px 0; }
 .toast .mono { color: var(--indigo-text); }
-.toast button { grid-column: 2; grid-row: 1 / span 2; }
-.toast.error { border-color: rgba(248, 113, 113, 0.45); }
-.toast.error .mono { color: var(--red-text); }
+.toast-icon { font-size: 14px; font-weight: 700; flex-shrink: 0; }
+.toast-text { flex: 1; min-width: 0; line-height: 1.4; word-break: break-word; }
+.toast-close-btn {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: var(--muted) !important;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px !important;
+  margin-left: auto;
+  opacity: 0.6;
+  transform: none !important;
+  transition: opacity 0.15s, color 0.15s;
+}
+.toast-close-btn:hover {
+  opacity: 1 !important;
+  color: var(--text) !important;
+  background: transparent !important;
+}
+.toast-close-btn::after, .toast-close-btn::before {
+  display: none !important;
+}
+.toast button:not(.toast-close-btn) { margin-left: auto; }
+
+.toast-info {
+  border-color: rgba(99, 102, 241, 0.4);
+  box-shadow: 0 20px 48px -16px var(--shadow-deep), 0 0 24px -8px rgba(99, 102, 241, 0.4);
+}
+.toast-info .toast-icon { color: var(--indigo-text); }
+
+.toast-success {
+  border-color: rgba(52, 211, 153, 0.4);
+  box-shadow: 0 20px 48px -16px var(--shadow-deep), 0 0 24px -8px rgba(52, 211, 153, 0.35);
+}
+.toast-success .toast-icon { color: var(--green); }
+
+.toast-warn {
+  border-color: rgba(251, 191, 36, 0.45);
+  box-shadow: 0 20px 48px -16px var(--shadow-deep), 0 0 24px -8px rgba(251, 191, 36, 0.35);
+}
+.toast-warn .toast-icon { color: var(--amber); }
+
+.toast-error, .toast.error {
+  border-color: rgba(248, 113, 113, 0.45);
+  box-shadow: 0 20px 48px -16px var(--shadow-deep), 0 0 24px -8px rgba(248, 113, 113, 0.4);
+}
+.toast-error .toast-icon, .toast.error .mono { color: var(--red-text); }
 
 /* ---------- Reveal choreography (driven by ui.js) ---------- */
 .js [data-rev] { opacity: 0; }
@@ -2612,7 +2658,7 @@ fieldset.choice-group, fieldset.theme-options { margin: 0; padding: 0; border: 0
 .tour-floater-btn {
   position: fixed;
   bottom: 24px;
-  right: 24px;
+  left: 24px;
   z-index: 999;
   display: inline-flex;
   align-items: center;
@@ -3741,4 +3787,169 @@ fieldset.choice-group, fieldset.theme-options { margin: 0; padding: 0; border: 0
     grid-template-columns: 1fr;
   }
 }
+
+/* Navigation: Voice Assistant link */
+.assistant-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: var(--radius-btn);
+  background-color: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  text-decoration: none;
+  transition: all 0.2s var(--ease);
+}
+.assistant-nav-btn:hover {
+  background-color: rgb(var(--ink) / 0.05);
+  border-color: rgb(var(--ink) / 0.32);
+  color: var(--text);
+}
+.assistant-nav-btn svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+}
+
+/* Tabular Numbers for currencies, counters, and statistics */
+.expense-amount,
+.expense-chip,
+.cal-count-pill,
+.today-count-badge,
+.overdue-count-badge,
+.cal-day-num,
+.time,
+.cal-note-time,
+.bell-count,
+.timeline-range-badge,
+.cook-timer-display,
+.timer-display,
+.typed-card-amount,
+.stat-value,
+.cal-bullet-main,
+.stat-number {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Empty task states */
+.cal-empty-task-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius-inner);
+  background: rgba(var(--ink) / 0.02);
+  border: 1px dashed var(--line);
+  list-style: none;
+  animation: rise 0.5s var(--ease) both;
+}
+.cal-empty-icon {
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.cal-empty-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.cal-empty-text strong {
+  font-size: 13px;
+  color: var(--text-2);
+  font-weight: 500;
+}
+.cal-empty-task-card.celebration {
+  background: rgba(99, 102, 241, 0.06);
+  border-color: rgba(99, 102, 241, 0.25);
+}
+.cal-empty-task-card.clean {
+  background: rgba(52, 211, 153, 0.06);
+  border-color: rgba(52, 211, 153, 0.25);
+}
+
+/* Inline Pin Creator */
+.cal-pin-inline-form {
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--surface);
+  border: 1px solid var(--indigo);
+  border-radius: var(--radius-inner);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: rise 0.3s var(--ease) both;
+}
+.cal-pin-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--void);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text);
+}
+.cal-pin-input:focus {
+  outline: none;
+  border-color: var(--indigo);
+}
+.cal-pin-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Empty Smart Cards state */
+.cards-empty-state {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 48px 24px;
+  background: var(--surface);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-card);
+  animation: rise 0.5s var(--ease) both;
+}
+.cards-empty-icon {
+  font-size: 36px;
+  margin-bottom: 12px;
+}
+.cards-empty-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.cards-empty-desc {
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 420px;
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+.cards-empty-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* Kitchen timer ringing pulse */
+@keyframes timerPulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 rgba(248, 113, 113, 0); }
+  50% { transform: scale(1.08); box-shadow: 0 0 24px rgba(248, 113, 113, 0.7); }
+}
+.timer-ringing {
+  animation: timerPulse 0.5s ease-in-out infinite;
+  color: var(--red-text) !important;
+}
+
 

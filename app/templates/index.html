@@ -50,6 +50,9 @@
       </div>
 
       <div class="nav-actions">
+        <a href="/assistant" id="assistantNavBtn" class="assistant-nav-btn" aria-label="Voice assistant" title="Open voice assistant">
+          <svg viewBox="0 0 24 24" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+        </a>
         <button type="button" id="soundToggle" class="secondary icon-btn" aria-pressed="true" aria-label="Sound" title="Sound on">
           <svg class="ico-sound-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z"/><path d="M15.5 9.2a4 4 0 0 1 0 5.6M18.2 6.6a7.6 7.6 0 0 1 0 10.8"/></svg>
           <svg class="ico-sound-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg>
@@ -201,11 +204,11 @@
           <div class="composer" data-mode="note">
             <div class="composer-body">
               <div class="mode-pane" data-pane="note">
-                <textarea id="noteText" aria-label="Note text" placeholder="Capture a thought, task, or idea…"></textarea>
+                <textarea id="noteText" aria-label="Note text" placeholder="Capture a thought, task, or idea… (⌘+Enter to save)"></textarea>
               </div>
               <div class="mode-pane url-capture" data-pane="url" hidden>
                 <label for="urlText" class="pane-label">Capture URL</label>
-                <input id="urlText" type="url" maxlength="2000" placeholder="https://example.com/article" />
+                <input id="urlText" type="url" maxlength="2000" placeholder="https://example.com/article (Enter to save)" />
               </div>
               <div class="mode-pane pdf-capture" data-pane="pdf" hidden>
                 <div class="drop">

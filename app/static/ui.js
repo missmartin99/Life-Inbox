@@ -442,6 +442,56 @@
     openToasts.set(panelName, {update});
   }
 
+  /* ---------- Universal Toast Engine ---------- */
+  function toast(message, type = 'info', duration = 4000) {
+    const rootEl = toastRoot || document.getElementById('toasts');
+    if (!rootEl) return null;
+
+    const normType = (type === 'warning' || type === 'warn') ? 'warn' : (type || 'info');
+    const toastEl = document.createElement('div');
+    toastEl.className = `toast toast-${normType}`;
+    toastEl.setAttribute('role', normType === 'error' ? 'alert' : 'status');
+
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'toast-icon mono';
+    if (normType === 'success') iconSpan.textContent = '✓';
+    else if (normType === 'warn') iconSpan.textContent = '⚠️';
+    else if (normType === 'error') iconSpan.textContent = '✕';
+    else iconSpan.textContent = '✦';
+
+    const textSpan = document.createElement('span');
+    textSpan.className = 'toast-text';
+    textSpan.textContent = message;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'toast-close-btn';
+    closeBtn.setAttribute('aria-label', 'Dismiss notification');
+    closeBtn.innerHTML = '&times;';
+
+    toastEl.append(iconSpan, textSpan, closeBtn);
+    rootEl.append(toastEl);
+    requestAnimationFrame(() => toastEl.classList.add('in'));
+
+    let timer = window.setTimeout(dismiss, duration);
+
+    function dismiss() {
+      window.clearTimeout(timer);
+      toastEl.classList.remove('in');
+      toastEl.classList.add('out');
+      window.setTimeout(() => toastEl.remove(), 400);
+    }
+
+    closeBtn.addEventListener('click', dismiss);
+    toastEl.addEventListener('pointerenter', () => window.clearTimeout(timer));
+    toastEl.addEventListener('pointerleave', () => {
+      timer = window.setTimeout(dismiss, Math.min(duration, 2000));
+    });
+
+    return { dismiss };
+  }
+  window.toast = toast;
+
   document.querySelectorAll('.status').forEach(status => {
     new MutationObserver(() => {
       status.classList.remove('flash');

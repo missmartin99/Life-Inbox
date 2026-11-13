@@ -726,7 +726,7 @@ function renderNote(note) {
       note.kind = res.kind;
       note.kind_fields = res.kind_fields;
       root.replaceWith(renderNote(note));
-      if (window.toast) window.toast(`Converted to ${res.kind} card!`);
+      if (window.toast) window.toast(`Converted to ${res.kind} card!`, 'success');
     } catch {
       makeCardBtn.textContent = '✨ Smart Card';
     }
@@ -742,7 +742,7 @@ function renderNote(note) {
     try {
       const res = await fetchJson(`/api/items/${note.id}/entities`, {method: 'POST'});
       extractEntBtn.textContent = `👤 ${res.length} Entities`;
-      if (window.toast) window.toast(`Extracted ${res.length} entities! Check 05 Entities Treemap tab.`);
+      if (window.toast) window.toast(`Extracted ${res.length} entities! Check 05 Entities Treemap tab.`, 'success');
     } catch {
       extractEntBtn.textContent = '👤 Entities';
     }
@@ -1471,12 +1471,24 @@ async function loadDashboard() {
     // 6. Populate Coming up
     const upcomingEl = document.getElementById('upcomingList');
     if (upcomingEl) {
-      upcomingEl.innerHTML = dashState.upcomingTasks.map(item => `
-        <li class="cal-upcoming-item" id="upcoming-${item.id}">
-          <span class="cal-day-tag mono">${esc(item.day || 'Soon')}</span>
-          <span class="cal-upcoming-text">${esc(item.text)}</span>
-        </li>
-      `).join('');
+      if (!dashState.upcomingTasks || dashState.upcomingTasks.length === 0) {
+        upcomingEl.innerHTML = `
+          <li class="cal-empty-task-card">
+            <span class="cal-empty-icon">📅</span>
+            <div class="cal-empty-text">
+              <strong>No upcoming tasks</strong>
+              <span>Schedule future tasks in the calendar.</span>
+            </div>
+          </li>
+        `;
+      } else {
+        upcomingEl.innerHTML = dashState.upcomingTasks.map(item => `
+          <li class="cal-upcoming-item" id="upcoming-${item.id}">
+            <span class="cal-day-tag mono">${esc(item.day || 'Soon')}</span>
+            <span class="cal-upcoming-text">${esc(item.text)}</span>
+          </li>
+        `).join('');
+      }
     }
 
     // 7. Populate Pinned notes
@@ -1488,13 +1500,25 @@ async function loadDashboard() {
     } catch {}
 
     if (pinnedEl) {
-      pinnedEl.innerHTML = pins.map((p, idx) => `
-        <li class="cal-pinned-item" title="${esc(p.detail || '')}">
-          <span class="cal-star">★</span>
-          <span class="cal-pinned-title">${esc(p.title)}</span>
-          <button type="button" class="cal-pin-del" onclick="removePin(${idx})" title="Unpin">×</button>
-        </li>
-      `).join('');
+      if (!pins || pins.length === 0) {
+        pinnedEl.innerHTML = `
+          <li class="cal-empty-task-card">
+            <span class="cal-empty-icon">📌</span>
+            <div class="cal-empty-text">
+              <strong>No pinned notes yet</strong>
+              <span>Click + above to pin quick thoughts here.</span>
+            </div>
+          </li>
+        `;
+      } else {
+        pinnedEl.innerHTML = pins.map((p, idx) => `
+          <li class="cal-pinned-item" title="${esc(p.detail || '')}">
+            <span class="cal-star">★</span>
+            <span class="cal-pinned-title">${esc(p.title)}</span>
+            <button type="button" class="cal-pin-del" onclick="removePin(${idx})" title="Unpin">×</button>
+          </li>
+        `).join('');
+      }
     }
 
     // 8. Populate Latest notes
@@ -1533,15 +1557,27 @@ async function loadDashboard() {
 function renderDueTodayList() {
   const dueTodayEl = document.getElementById('dueTodayList');
   if (!dueTodayEl) return;
-  dueTodayEl.innerHTML = dashState.todayTasks.map(task => `
-    <li class="cal-task-item ${task.done ? 'completed' : ''}" id="task-${task.id}">
-      <label class="cal-checkbox-label">
-        <input type="checkbox" data-task-id="${task.id}" ${task.done ? 'checked' : ''} onchange="toggleTask('${task.id}', event.target.checked)" />
-        <span class="cal-custom-box"></span>
-        <span class="cal-task-name">${esc(task.text)}</span>
-      </label>
-    </li>
-  `).join('');
+  if (!dashState.todayTasks || dashState.todayTasks.length === 0) {
+    dueTodayEl.innerHTML = `
+      <li class="cal-empty-task-card celebration">
+        <span class="cal-empty-icon">✨</span>
+        <div class="cal-empty-text">
+          <strong>All clear for today</strong>
+          <span>No pending tasks due today. Great job!</span>
+        </div>
+      </li>
+    `;
+  } else {
+    dueTodayEl.innerHTML = dashState.todayTasks.map(task => `
+      <li class="cal-task-item ${task.done ? 'completed' : ''}" id="task-${task.id}">
+        <label class="cal-checkbox-label">
+          <input type="checkbox" data-task-id="${task.id}" ${task.done ? 'checked' : ''} onchange="toggleTask('${task.id}', event.target.checked)" />
+          <span class="cal-custom-box"></span>
+          <span class="cal-task-name">${esc(task.text)}</span>
+        </label>
+      </li>
+    `).join('');
+  }
   updateDueTodayCount();
 }
 
@@ -1557,15 +1593,27 @@ function updateDueTodayCount() {
 function renderOverdueList() {
   const overdueEl = document.getElementById('overdueList');
   if (!overdueEl) return;
-  overdueEl.innerHTML = dashState.overdueTasks.map(task => `
-    <li class="cal-task-item overdue ${task.done ? 'completed' : ''}" id="task-${task.id}">
-      <label class="cal-checkbox-label">
-        <input type="checkbox" data-task-id="${task.id}" ${task.done ? 'checked' : ''} onchange="toggleTask('${task.id}', event.target.checked)" />
-        <span class="cal-custom-box rose"></span>
-        <span class="cal-task-name">${esc(task.text)}</span>
-      </label>
-    </li>
-  `).join('');
+  if (!dashState.overdueTasks || dashState.overdueTasks.length === 0) {
+    overdueEl.innerHTML = `
+      <li class="cal-empty-task-card clean">
+        <span class="cal-empty-icon">🎉</span>
+        <div class="cal-empty-text">
+          <strong>No overdue tasks</strong>
+          <span>You're completely caught up!</span>
+        </div>
+      </li>
+    `;
+  } else {
+    overdueEl.innerHTML = dashState.overdueTasks.map(task => `
+      <li class="cal-task-item overdue ${task.done ? 'completed' : ''}" id="task-${task.id}">
+        <label class="cal-checkbox-label">
+          <input type="checkbox" data-task-id="${task.id}" ${task.done ? 'checked' : ''} onchange="toggleTask('${task.id}', event.target.checked)" />
+          <span class="cal-custom-box rose"></span>
+          <span class="cal-task-name">${esc(task.text)}</span>
+        </label>
+      </li>
+    `).join('');
+  }
   updateOverdueCount();
 }
 
@@ -1732,24 +1780,87 @@ function closeCalAskDrawer() {
   if (drawer) drawer.hidden = true;
 }
 
-// Pinning notes
-function promptAddPin() {
-  const title = prompt('Enter a note title to pin:');
-  if (!title) return;
-  const detail = prompt('Optional details / notes:') || '';
+// Pinning notes — non-blocking inline input
+function promptAddPin(directTitle, directDetail) {
+  if (directTitle) {
+    savePinData(directTitle, directDetail || '');
+    return;
+  }
+  const pinnedList = document.getElementById('pinnedList');
+  if (!pinnedList) return;
 
+  const existingForm = document.getElementById('calPinInlineForm');
+  if (existingForm) {
+    const titleInput = document.getElementById('calPinTitleInput');
+    if (titleInput) titleInput.focus();
+    return;
+  }
+
+  const inlineForm = document.createElement('li');
+  inlineForm.id = 'calPinInlineForm';
+  inlineForm.className = 'cal-pin-inline-form';
+  inlineForm.innerHTML = `
+    <input type="text" id="calPinTitleInput" placeholder="Note title to pin..." class="cal-pin-input" />
+    <input type="text" id="calPinDetailInput" placeholder="Optional details / notes..." class="cal-pin-input" />
+    <div class="cal-pin-inline-actions">
+      <button type="button" class="secondary chip" onclick="cancelAddPin()">Cancel</button>
+      <button type="button" class="primary chip" onclick="saveInlinePin()">Pin Note</button>
+    </div>
+  `;
+  pinnedList.prepend(inlineForm);
+
+  const titleInput = document.getElementById('calPinTitleInput');
+  const detailInput = document.getElementById('calPinDetailInput');
+  if (titleInput) {
+    titleInput.focus();
+    titleInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') saveInlinePin();
+      if (e.key === 'Escape') cancelAddPin();
+    });
+  }
+  if (detailInput) {
+    detailInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') saveInlinePin();
+      if (e.key === 'Escape') cancelAddPin();
+    });
+  }
+}
+
+function cancelAddPin() {
+  const inlineForm = document.getElementById('calPinInlineForm');
+  if (inlineForm) inlineForm.remove();
+}
+
+function saveInlinePin() {
+  const titleInput = document.getElementById('calPinTitleInput');
+  const detailInput = document.getElementById('calPinDetailInput');
+  const title = titleInput ? titleInput.value.trim() : '';
+  const detail = detailInput ? detailInput.value.trim() : '';
+
+  if (!title) {
+    if (window.toast) window.toast('Please enter a note title to pin', 'warn');
+    if (titleInput) titleInput.focus();
+    return;
+  }
+
+  savePinData(title, detail);
+  cancelAddPin();
+}
+
+function savePinData(title, detail) {
   let pins = defaultPinnedNotes;
   try {
     const stored = window.localStorage.getItem('lifeInbox.pinned');
     if (stored) pins = JSON.parse(stored);
   } catch {}
 
-  pins.push({ id: 'pin-' + Date.now(), title: title.trim(), detail: detail.trim() });
+  pins.push({ id: 'pin-' + Date.now(), title: title, detail: detail });
   try {
     window.localStorage.setItem('lifeInbox.pinned', JSON.stringify(pins));
   } catch {}
 
   loadDashboard();
+  if (window.toast) window.toast('Note pinned to dashboard!', 'success');
 }
 
 function removePin(index) {
@@ -2598,6 +2709,7 @@ async function refreshDossierSummary() {
 
     const res = await fetchJson(`/api/entities/${currentDossierEntityId}/summary${qs ? '?' + qs : ''}`, {}, 'Failed to refresh summary');
     if (summaryEl) summaryEl.innerHTML = renderMarkdownSnippet(res.summary);
+    if (window.toast) window.toast('Entity summary updated with latest context', 'info');
   } catch {
     if (summaryEl) summaryEl.innerHTML = '<span class="muted">Failed to generate updated summary.</span>';
   } finally {
@@ -2670,9 +2782,11 @@ async function scanAllNotesForEntities() {
       } catch (e) {}
     }
     statusEl.textContent = `Scan complete! Discovered ${total} entity connections.`;
+    if (window.toast) window.toast(`Scan complete! Discovered ${total} entity connections.`, 'success');
     await loadEntities();
   } catch (e) {
     statusEl.textContent = 'Entity extraction encountered an issue.';
+    if (window.toast) window.toast('Entity extraction encountered an issue.', 'error');
   }
 }
 
@@ -2935,7 +3049,35 @@ function filterAndRenderCards() {
     statusEl.textContent = allCardsCache.length === 0
       ? 'No smart cards created yet. Click "Auto-Format Notes into Cards" or "+ New Smart Card"!'
       : 'No smart cards match your current search/filters.';
-    listEl.innerHTML = '';
+    if (allCardsCache.length === 0) {
+      listEl.innerHTML = `
+        <div class="cards-empty-state">
+          <div class="cards-empty-icon">🃏</div>
+          <div class="cards-empty-title">No smart cards created yet</div>
+          <p class="cards-empty-desc">Turn notes into structured receipts, recipes, book reviews, or contacts automatically with AI.</p>
+          <div class="cards-empty-actions">
+            <button type="button" class="primary" onclick="openNewCardModal()">+ New Smart Card</button>
+            <button type="button" class="secondary" onclick="convertAllNotesToCards()">✨ Auto-Format Notes into Cards</button>
+          </div>
+        </div>
+      `;
+    } else {
+      const activeFilters = [
+        currentCardKindFilter ? `kind "${currentCardKindFilter}"` : '',
+        currentCardSearchQuery ? `matching "${esc(currentCardSearchQuery)}"` : '',
+        currentCardCategoryFilter ? `category "${currentCardCategoryFilter}"` : ''
+      ].filter(Boolean).join(' and ');
+      listEl.innerHTML = `
+        <div class="cards-empty-state">
+          <div class="cards-empty-icon">🔍</div>
+          <div class="cards-empty-title">No matching smart cards</div>
+          <p class="cards-empty-desc">No cards match active filter: ${activeFilters || 'current criteria'}.</p>
+          <div class="cards-empty-actions">
+            <button type="button" class="secondary" onclick="clearCardsFilters()">Clear filters</button>
+          </div>
+        </div>
+      `;
+    }
     return;
   }
 
@@ -3089,6 +3231,18 @@ function filterCardsByKind(kind) {
   filterAndRenderCards();
 }
 
+function clearCardsFilters() {
+  currentCardKindFilter = '';
+  currentCardCategoryFilter = '';
+  currentCardSearchQuery = '';
+  const searchInput = document.getElementById('cardsSearchInput');
+  if (searchInput) searchInput.value = '';
+  document.querySelectorAll('#panel-cards .feature-bar .chip').forEach(btn => {
+    btn.classList.toggle('active', btn.id === 'chip-cards-all');
+  });
+  filterAndRenderCards();
+}
+
 function filterCardsByCategory(cat) {
   currentCardCategoryFilter = (currentCardCategoryFilter.toLowerCase() === cat.toLowerCase()) ? '' : cat;
   if (currentCardCategoryFilter && currentCardKindFilter !== 'receipt') {
@@ -3224,7 +3378,7 @@ function downloadEventIcs(itemId) {
 function exportExpensesToCsv() {
   const receipts = allCardsCache.filter(c => c.kind === 'receipt');
   if (receipts.length === 0) {
-    alert('No receipts found to export.');
+    if (window.toast) window.toast('No receipts found to export.', 'info');
     return;
   }
 
@@ -3252,6 +3406,7 @@ function exportExpensesToCsv() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+  if (window.toast) window.toast(`Exported ${receipts.length} receipts to CSV!`, 'success');
 }
 
 async function openContactInTreemap(name) {
@@ -3354,7 +3509,17 @@ function toggleCookTimer() {
         if (btn) btn.textContent = 'Start';
         cookTimerSeconds = 0;
         updateCookTimerDisplay();
-        alert('🔔 Kitchen Timer: Recipe step complete!');
+        if (window.toast) {
+          window.toast('🔔 Kitchen Timer: Recipe step complete!', 'info', 8000);
+        }
+        if (typeof playSound === 'function') {
+          playSound('ping');
+        }
+        const timerDisplay = document.getElementById('cookTimerDisplay');
+        if (timerDisplay) {
+          timerDisplay.classList.add('timer-ringing');
+          setTimeout(() => timerDisplay.classList.remove('timer-ringing'), 3000);
+        }
       } else {
         updateCookTimerDisplay();
       }
@@ -3547,8 +3712,11 @@ async function submitNewSmartCard(e) {
     closeNewCardModal();
     filterCardsByKind(kind);
     await loadCards(kind);
+    if (window.toast) window.toast('Smart card created successfully!', 'success');
   } catch (err) {
-    alert('Error creating smart card: ' + err.message);
+    if (window.toast) {
+      window.toast('Error creating smart card: ' + err.message, 'error');
+    }
   }
 }
 
@@ -3567,9 +3735,11 @@ async function convertAllNotesToCards() {
       }
     }
     statusEl.textContent = `Successfully structured ${count} cards!`;
+    if (window.toast) window.toast(`Successfully structured ${count} cards!`, 'success');
     await loadCards();
   } catch (e) {
     statusEl.textContent = 'Error formatting notes into cards.';
+    if (window.toast) window.toast('Error formatting notes into cards.', 'error');
   }
 }
 
@@ -3678,7 +3848,7 @@ async function deleteWebhook(id) {
 function copyMcpConfig() {
   const snippet = document.getElementById('mcpConfigSnippet').textContent;
   navigator.clipboard.writeText(snippet);
-  if (window.toast) window.toast('MCP configuration copied to clipboard!');
+  if (window.toast) window.toast('MCP configuration copied to clipboard!', 'success');
 }
 
 // --- Floating Onboarding Tour --------------------------------------------
@@ -3724,3 +3894,25 @@ if (itemSearchEl) {
 setInterval(() => {
   if (!document.hidden && typeof loadDashboard === "function") loadDashboard({quiet: true});
 }, 60000);
+
+// Fast-capture keyboard shortcuts (Cmd+Enter on #noteText, Enter on #urlText)
+const noteTextEl = document.getElementById('noteText');
+if (noteTextEl) {
+  noteTextEl.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      addNote();
+    }
+  });
+}
+
+const urlTextEl = document.getElementById('urlText');
+if (urlTextEl) {
+  urlTextEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addUrl();
+    }
+  });
+}
+
