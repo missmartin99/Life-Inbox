@@ -1,11 +1,21 @@
 import logging
 import re
+import secrets
 import threading
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app.auto_analysis import AutoAnalyzer, auto_analysis_enabled
@@ -22,7 +32,33 @@ from app.capture.storage import (
 )
 from app.capture.url_fetch import fetch_url, validate_public_http_url
 from app.capture.voice_extract import process_voice_bytes, validate_audio_upload
+from app.privacy import redact
+from app.item_kinds import KIND_FIELDS, make_card
+from app.expenses import expense_summary
+from app.entities import ENTITY_TYPES, extract_entities, summarize_entity
+from app.attention import dates as attention_dates
+from app.flashcards import make_cards, next_review
+from app.resurface import resurface
+from app.api_access import WEBHOOK_EVENTS, deliver_webhooks, new_token
 from app.database import (
+    add_api_token,
+    add_webhook,
+    delete_api_token,
+    delete_webhook,
+    list_api_tokens,
+    list_webhooks,
+    webhooks_for_event,
+    add_flashcards,
+    get_flashcard,
+    list_due_flashcards,
+    save_flashcard_review,
+    get_entity_page,
+    list_entities,
+    save_item_entities,
+    list_items_by_kind,
+    save_item_card,
+    list_ai_call_log,
+    set_item_sensitive,
     add_image_item_to_db,
     add_item_to_db,
     add_note_to_db,
@@ -78,6 +114,11 @@ from app.organizer import analyze_inbox_with_openai, validate_analysis_result
 from app.retrieval.ask import build_grounded_answer
 from app.retrieval.search import search_passages
 from app.schemas import (
+    ApiTokenCreate,
+    WebhookCreate,
+    FlashcardReview,
+    RedactPreviewRequest,
+    SensitiveUpdate,
     AskRequest,
     AskResponse,
     CalendarConfirmRequest,
@@ -95,6 +136,8 @@ from app.schemas import (
     PersistedAnalysis,
     Priority,
     SearchHit,
+    SmartCardCreate,
+    SmartCardUpdate,
     Task,
     TaskListStatus,
     TaskReminderRequest,
@@ -208,6 +251,16 @@ async def bind_owner_from_session(request, call_next):
 
     token = request.cookies.get(SESSION_COOKIE)
     owner_id = parse_session_token(token) if token else None
+    if owner_id is None:
+        # Programs (scripts, the MCP server) send "Authorization: Bearer li_..."
+        from app.api_access import hash_token, token_from_header
+        from app.database import owner_for_token_hash
+
+        api_token = token_from_header(request.headers.get("authorization"))
+        if api_token:
+            owner_id = owner_for_token_hash(hash_token(api_token))
+            if owner_id is None:
+                return JSONResponse({"detail": "Invalid API token"}, status_code=401)
     if owner_id is None:
         config = load_config(strict=False)
         if config.environment == "local":
@@ -472,9 +525,12 @@ def _process_voice_item(item_id: int) -> dict:
 
 
 @app.post("/api/items", response_model=InboxItem)
-def create_item(payload: InboxItemCreate):
+def create_item(payload: InboxItemCreate, background_tasks: BackgroundTasks):
     try:
         item = add_item_to_db(payload.raw_text)
+        _trigger_auto_analysis()
+        queue_webhooks(background_tasks, "item.created", item)
+        return item
     except Exception as exc:
         logger.exception("Failed to save inbox item")
         raise HTTPException(
@@ -486,7 +542,7 @@ def create_item(payload: InboxItemCreate):
 
 
 @app.post("/api/items/url", response_model=InboxItem)
-def create_url_item(payload: UrlItemCreate):
+def create_url_item(payload: UrlItemCreate, background_tasks: BackgroundTasks):
     try:
         url = validate_public_http_url(payload.url)
     except ValueError as exc:
@@ -503,11 +559,14 @@ def create_url_item(payload: UrlItemCreate):
 
     processed = _process_url_item(item["id"])
     _trigger_auto_analysis()
+    queue_webhooks(background_tasks, "item.created", processed)
     return processed
 
 
 @app.post("/api/items/pdf", response_model=InboxItem)
-async def create_pdf_item(file: UploadFile = File(...)):
+async def create_pdf_item(
+    background_tasks: BackgroundTasks, file: UploadFile = File(...)
+):
     data = await file.read()
     try:
         safe_filename = validate_pdf_upload(
@@ -541,11 +600,14 @@ async def create_pdf_item(file: UploadFile = File(...)):
 
     processed = _process_pdf_item(item["id"])
     _trigger_auto_analysis()
+    queue_webhooks(background_tasks, "item.created", processed)
     return processed
 
 
 @app.post("/api/items/image", response_model=InboxItem)
-async def create_image_item(file: UploadFile = File(...)):
+async def create_image_item(
+    background_tasks: BackgroundTasks, file: UploadFile = File(...)
+):
     data = await file.read()
     try:
         safe_filename, detected_mime, extension = validate_image_upload(
@@ -589,11 +651,14 @@ async def create_image_item(file: UploadFile = File(...)):
 
     processed = _process_image_item(item["id"])
     _trigger_auto_analysis()
+    queue_webhooks(background_tasks, "item.created", processed)
     return processed
 
 
 @app.post("/api/items/voice", response_model=InboxItem)
-async def create_voice_item(file: UploadFile = File(...)):
+async def create_voice_item(
+    background_tasks: BackgroundTasks, file: UploadFile = File(...)
+):
     data = await file.read()
     try:
         safe_filename, detected_mime, extension = validate_audio_upload(
@@ -643,6 +708,7 @@ async def create_voice_item(file: UploadFile = File(...)):
 
     processed = _process_voice_item(item["id"])
     _trigger_auto_analysis()
+    queue_webhooks(background_tasks, "item.created", processed)
     return processed
 
 
@@ -1139,6 +1205,272 @@ def patch_topic(topic_id: int, payload: TopicUpdate):
     return topic
 
 
+# --- Smart templates --------------------------------------------------------
+
+
+@app.post("/api/items/{item_id}/card", response_model=InboxItem)
+def create_item_card(item_id: int):
+    """Work out what kind of item this is (recipe, book, ...) and its fields."""
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    text = item["extracted_text"] or item["raw_text"] or item["title"] or ""
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Item has no text yet")
+
+    card = make_card(text, is_sensitive=item["is_sensitive"])
+    return save_item_card(item_id, card["kind"], card["fields"])
+
+
+@app.put("/api/items/{item_id}/card", response_model=InboxItem)
+def update_item_card(item_id: int, payload: SmartCardUpdate):
+    """Manually update or patch a card's kind and fields."""
+    if payload.kind not in KIND_FIELDS and payload.kind != "other":
+        raise HTTPException(status_code=400, detail="Unknown kind")
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    updated = save_item_card(item_id, payload.kind, payload.fields)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return updated
+
+
+@app.post("/api/cards", response_model=InboxItem)
+def create_card_directly(payload: SmartCardCreate):
+    """Create a new item and smart card directly."""
+    if payload.kind not in KIND_FIELDS and payload.kind != "other":
+        raise HTTPException(status_code=400, detail="Unknown kind")
+    title = payload.title or payload.fields.get("name") or payload.fields.get("title") or payload.fields.get("vendor") or f"{payload.kind.title()} Note"
+    raw_lines = [f"**{title}** ({payload.kind})"]
+    for k, v in payload.fields.items():
+        if isinstance(v, list):
+            raw_lines.append(f"{k.capitalize()}: {', '.join(str(x) for x in v)}")
+        else:
+            raw_lines.append(f"{k.capitalize()}: {v}")
+    raw_text = "\n".join(raw_lines)
+    item = add_item_to_db(raw_text)
+    updated = save_item_card(item["id"], payload.kind, payload.fields)
+    return updated
+
+
+@app.get("/api/cards", response_model=List[InboxItem])
+def list_cards(kind: Optional[str] = Query(None)):
+    """Items that have a smart card, optionally only one kind."""
+    if kind is not None and kind not in KIND_FIELDS:
+        raise HTTPException(status_code=400, detail="Unknown kind")
+    return list_items_by_kind(kind)
+
+
+@app.get("/api/cards/kinds")
+def list_card_kinds():
+    """The kinds we recognise and the fields each one has."""
+    return KIND_FIELDS
+
+
+# --- Expenses (receipts) ---------------------------------------------------
+
+
+@app.get("/api/expenses")
+def get_expenses(month: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$")):
+    """Totals from receipt cards, per month and per category.
+
+    Pass ?month=2026-11 for one month. Make receipts with
+    POST /api/items/{id}/card on a photo or note of a bill.
+    """
+    return expense_summary(list_items_by_kind("receipt"), month=month)
+
+
+# --- People & entities ------------------------------------------------------
+
+
+@app.post("/api/items/{item_id}/entities")
+def find_item_entities(item_id: int):
+    """Find the people, places and organizations in one item and save them."""
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    text = item["extracted_text"] or item["raw_text"] or item["title"] or ""
+    entities = extract_entities(text, is_sensitive=item["is_sensitive"])
+    return save_item_entities(item_id, entities)
+
+
+@app.get("/api/entities")
+def get_entities(
+    type: Optional[str] = Query(None),
+    days: Optional[int] = Query(None, ge=1, le=3650),
+    start_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}"),
+    end_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}"),
+):
+    """All entities with how many items mention them (?type=person&start_date=2026-09-01&end_date=2026-09-30)."""
+    if type is not None and type not in ENTITY_TYPES:
+        raise HTTPException(status_code=400, detail="Unknown entity type")
+    return list_entities(type, days=days, start_date=start_date, end_date=end_date)
+
+
+@app.get("/api/entities/{entity_id}")
+def get_entity(
+    entity_id: int,
+    start_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}"),
+    end_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}"),
+):
+    """ "Everything about X": the entity and every item that mentions it (optionally date-filtered)."""
+    page = get_entity_page(entity_id, start_date=start_date, end_date=end_date)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return page
+
+
+@app.get("/api/entities/{entity_id}/summary")
+def get_entity_summary(
+    entity_id: int,
+    start_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}"),
+    end_date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}"),
+):
+    """AI-synthesized profile dossier summary for an entity from its connected items."""
+    page = get_entity_page(entity_id, start_date=start_date, end_date=end_date)
+    if page is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    summary = summarize_entity(
+        page["name"],
+        page["type"],
+        page.get("items", []),
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return {
+        "entity_id": entity_id,
+        "name": page["name"],
+        "type": page["type"],
+        "start_date": start_date,
+        "end_date": end_date,
+        "item_count": len(page.get("items", [])),
+        "summary": summary,
+    }
+
+
+# --- Resurfacing and flashcards ---------------------------------------------
+
+
+@app.get("/api/resurface")
+def get_resurfaced_items():
+    """Old notes worth another look: "on this day" and a few forgotten ones."""
+    today = attention_dates.today_in_configured_tz()
+    return resurface(list_items_from_db(limit=None, offset=0), today)
+
+
+@app.post("/api/items/{item_id}/flashcards")
+def create_flashcards(item_id: int):
+    """Turn an item into up to 3 flashcards, due for review today."""
+    item = get_item_from_db(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    text = item["extracted_text"] or item["raw_text"] or ""
+    cards = make_cards(text, is_sensitive=item["is_sensitive"])
+    if not cards:
+        raise HTTPException(status_code=400, detail="Could not make cards from this item")
+    today = attention_dates.today_in_configured_tz().isoformat()
+    return add_flashcards(item_id, cards, due_date=today)
+
+
+@app.get("/api/flashcards/due")
+def get_due_flashcards():
+    """Cards to review today (including overdue ones)."""
+    today = attention_dates.today_in_configured_tz().isoformat()
+    return list_due_flashcards(today)
+
+
+@app.post("/api/flashcards/{card_id}/review")
+def review_flashcard(card_id: int, body: FlashcardReview):
+    """Record whether you remembered the answer; schedules the next review."""
+    card = get_flashcard(card_id)
+    if card is None:
+        raise HTTPException(status_code=404, detail="Flashcard not found")
+    today = attention_dates.today_in_configured_tz()
+    box, due = next_review(card["box"], body.remembered, today)
+    return save_flashcard_review(card_id, box, due.isoformat())
+
+
+# --- Public API: tokens and webhooks ----------------------------------------
+
+
+def queue_webhooks(background_tasks: BackgroundTasks, event: str, data) -> None:
+    """Send `event` to the user's webhooks after the response has gone out."""
+    hooks = webhooks_for_event(event)
+    if hooks:
+        background_tasks.add_task(deliver_webhooks, hooks, event, data)
+
+
+@app.post("/api/tokens")
+def create_api_token(body: ApiTokenCreate):
+    """Create an API token. The token itself is shown ONLY in this response."""
+    token, token_hash = new_token()
+    saved = add_api_token(body.name, token_hash)
+    return {**saved, "token": token}
+
+
+@app.get("/api/tokens")
+def get_api_tokens():
+    return list_api_tokens()
+
+
+@app.delete("/api/tokens/{token_id}", status_code=204)
+def revoke_api_token(token_id: int):
+    if not delete_api_token(token_id):
+        raise HTTPException(status_code=404, detail="Token not found")
+    return Response(status_code=204)
+
+
+@app.post("/api/webhooks")
+def create_webhook(body: WebhookCreate):
+    """Register a URL to receive events. The signing secret is shown only once."""
+    if body.event not in WEBHOOK_EVENTS:
+        raise HTTPException(status_code=400, detail=f"Event must be one of {WEBHOOK_EVENTS}")
+    try:
+        url = validate_public_http_url(body.url)  # blocks localhost / private IPs
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    secret = secrets.token_hex(16)
+    return {**add_webhook(url, body.event, secret), "secret": secret}
+
+
+@app.get("/api/webhooks")
+def get_webhooks():
+    return list_webhooks()
+
+
+@app.delete("/api/webhooks/{webhook_id}", status_code=204)
+def remove_webhook(webhook_id: int):
+    if not delete_webhook(webhook_id):
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    return Response(status_code=204)
+
+
+# --- Privacy --------------------------------------------------------------
+
+
+@app.post("/api/items/{item_id}/sensitive", response_model=InboxItem)
+def mark_item_sensitive(item_id: int, body: SensitiveUpdate):
+    """Mark an item sensitive (never sent to AI) or clear the flag."""
+    item = set_item_sensitive(item_id, body.sensitive)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return item
+
+
+@app.get("/api/privacy/ai-log")
+def get_ai_call_log(limit: int = Query(50, ge=1, le=200)):
+    """Which AI calls were made for this user (no prompt text is stored)."""
+    return list_ai_call_log(limit=limit)
+
+
+@app.post("/api/privacy/redact-preview")
+def redact_preview(body: RedactPreviewRequest):
+    """Show what the AI would see for a piece of text, for demos and trust."""
+    redacted, mapping = redact(body.text)
+    return {"redacted_text": redacted, "hidden_values": len(mapping)}
+
+
 @app.get("/api/items/{item_id}/insight", response_model=ItemInsight)
 def read_item_insight(item_id: int):
     try:
@@ -1235,6 +1567,7 @@ def search_inbox(
             score=round(row.score, 4),
             keyword_score=round(row.keyword_score, 4),
             semantic_score=round(row.semantic_score, 4),
+            meaning_score=round(row.meaning_score, 4),
         )
         for row in ranked
     ]

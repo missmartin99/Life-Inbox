@@ -3,7 +3,7 @@ import json
 import os
 import re
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -12,6 +12,7 @@ _current_owner_id: ContextVar[Optional[int]] = ContextVar(
 )
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
     ForeignKey,
@@ -19,6 +20,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    delete,
     event,
     func,
     or_,
@@ -117,6 +119,121 @@ class InboxItemRecord(Base):
     owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(Text, nullable=False)
     updated_at = Column(Text, nullable=True)
+    # Privacy: sensitive items are never sent to the AI model.
+    is_sensitive = Column(Boolean, nullable=False, default=False, server_default="0")
+    # Smart templates: "recipe", "book", "contact", "event", "other" (or None
+    # if not checked yet) and its fields stored as JSON text.
+    kind = Column(Text, nullable=True)
+    kind_fields = Column(Text, nullable=True)
+
+
+class EntityRecord(Base):
+    """A person, place or organization mentioned in the inbox (stored once)."""
+
+    __tablename__ = "entities"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id", "entity_type", "name_key", name="uq_entities_owner_type_name"
+        ),
+        {"sqlite_autoincrement": True},
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    name = Column(Text, nullable=False)
+    name_key = Column(Text, nullable=False)  # lower-case name, for matching
+    entity_type = Column(Text, nullable=False)  # person | place | organization
+    created_at = Column(Text, nullable=False)
+
+
+class ItemEntityRecord(Base):
+    """Link table: which items mention which entities (many-to-many)."""
+
+    __tablename__ = "item_entities"
+
+    item_id = Column(
+        Integer, ForeignKey("inbox_items.id", ondelete="CASCADE"), primary_key=True
+    )
+    entity_id = Column(
+        Integer, ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class EmbeddingCacheRecord(Base):
+    """Saved embedding vectors, keyed by a hash of the text they came from."""
+
+    __tablename__ = "embedding_cache"
+
+    text_hash = Column(Text, primary_key=True)
+    model = Column(Text, primary_key=True)
+    vector = Column(Text, nullable=False)  # JSON list of floats
+    created_at = Column(Text, nullable=False)
+
+
+class FlashcardRecord(Base):
+    """A question/answer card made from an item, scheduled with Leitner boxes."""
+
+    __tablename__ = "flashcards"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    item_id = Column(
+        Integer, ForeignKey("inbox_items.id", ondelete="CASCADE"), nullable=False
+    )
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    box = Column(Integer, nullable=False, default=0, server_default="0")
+    due_date = Column(Text, nullable=False)  # YYYY-MM-DD
+    created_at = Column(Text, nullable=False)
+    last_reviewed_at = Column(Text, nullable=True)
+
+
+class ApiTokenRecord(Base):
+    """A token a program uses instead of logging in. Only the hash is stored."""
+
+    __tablename__ = "api_tokens"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    name = Column(Text, nullable=False)
+    token_hash = Column(Text, nullable=False, unique=True)
+    created_at = Column(Text, nullable=False)
+    last_used_at = Column(Text, nullable=True)
+
+
+class WebhookRecord(Base):
+    """A URL we POST to when an event (e.g. item.created) happens."""
+
+    __tablename__ = "webhooks"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    url = Column(Text, nullable=False)
+    event = Column(Text, nullable=False)
+    secret = Column(Text, nullable=False)
+    created_at = Column(Text, nullable=False)
+
+
+class AiCallLogRecord(Base):
+    """One row per AI call: what feature, which model, how much was sent.
+
+    We deliberately do NOT store the prompt text itself.
+    """
+
+    __tablename__ = "ai_call_log"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(Text, nullable=False)
+    feature = Column(Text, nullable=False)
+    model = Column(Text, nullable=False)
+    status = Column(Text, nullable=False)
+    chars_sent = Column(Integer, nullable=False)
+    redactions = Column(Integer, nullable=False)
 
 
 class AnalysisRunRecord(Base):
@@ -410,6 +527,9 @@ def _item_to_dict(item: InboxItemRecord) -> dict:
         "owner_user_id": item.owner_user_id,
         "created_at": item.created_at,
         "updated_at": item.updated_at,
+        "is_sensitive": bool(item.is_sensitive),
+        "kind": item.kind,
+        "kind_fields": json.loads(item.kind_fields) if item.kind_fields else None,
     }
 
 
@@ -631,6 +751,7 @@ def list_notes_from_db() -> list[dict]:
                 "id": item["id"],
                 "text": text,
                 "created_at": item["created_at"],
+                "is_sensitive": item["is_sensitive"],
             }
         )
     return notes
@@ -1891,3 +2012,454 @@ def get_organization_dashboard() -> dict:
             "analysis": latest,
             "pending_analysis_count": len(pending_ids),
         }
+
+
+# ---------------------------------------------------------------------------
+# Privacy: sensitive items and the AI call log
+# ---------------------------------------------------------------------------
+
+
+def set_item_sensitive(item_id: int, sensitive: bool) -> Optional[dict]:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None or item.owner_user_id != owner_id:
+            return None
+        item.is_sensitive = sensitive
+        session.commit()
+        return _item_to_dict(item)
+
+
+def get_sensitive_item_ids() -> set:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(InboxItemRecord.id).where(
+                InboxItemRecord.owner_user_id == owner_id,
+                InboxItemRecord.is_sensitive.is_(True),
+            )
+        )
+        return {row[0] for row in rows}
+
+
+def add_ai_call_log(feature, model, status, chars_sent, redactions) -> None:
+    with SessionLocal() as session:
+        session.add(
+            AiCallLogRecord(
+                owner_user_id=get_current_owner_id(),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                feature=feature,
+                model=model,
+                status=status,
+                chars_sent=chars_sent,
+                redactions=redactions,
+            )
+        )
+        session.commit()
+
+
+def list_ai_call_log(limit: int = 50) -> list:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(AiCallLogRecord)
+            .where(AiCallLogRecord.owner_user_id == owner_id)
+            .order_by(AiCallLogRecord.id.desc())
+            .limit(limit)
+        )
+        return [
+            {
+                "id": row.id,
+                "created_at": row.created_at,
+                "feature": row.feature,
+                "model": row.model,
+                "status": row.status,
+                "chars_sent": row.chars_sent,
+                "redactions": row.redactions,
+            }
+            for row in rows
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Smart templates: item kind + structured fields
+# ---------------------------------------------------------------------------
+
+
+def save_item_card(item_id: int, kind: str, fields: dict) -> Optional[dict]:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None or item.owner_user_id != owner_id:
+            return None
+        item.kind = kind
+        item.kind_fields = json.dumps(fields, ensure_ascii=False)
+        session.commit()
+        return _item_to_dict(item)
+
+
+def list_items_by_kind(kind: Optional[str] = None) -> list:
+    """Items that already have a card, newest first (optionally one kind)."""
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        query = select(InboxItemRecord).where(
+            InboxItemRecord.owner_user_id == owner_id,
+            InboxItemRecord.kind.is_not(None),
+        )
+        if kind:
+            query = query.where(InboxItemRecord.kind == kind)
+        query = query.order_by(InboxItemRecord.id.desc())
+        return [_item_to_dict(item) for item in session.scalars(query)]
+
+
+# ---------------------------------------------------------------------------
+# People & entities
+# ---------------------------------------------------------------------------
+
+
+def _entity_to_dict(entity: EntityRecord, item_count: Optional[int] = None) -> dict:
+    data = {"id": entity.id, "name": entity.name, "type": entity.entity_type}
+    if item_count is not None:
+        data["item_count"] = item_count
+    return data
+
+
+def save_item_entities(item_id: int, entities: list) -> Optional[list]:
+    """Replace the entities linked to one item. Reuses existing entity rows."""
+    owner_id = require_owner_id()
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None or item.owner_user_id != owner_id:
+            return None
+
+        # Start fresh for this item, so re-running never leaves stale links.
+        session.execute(delete(ItemEntityRecord).where(ItemEntityRecord.item_id == item_id))
+
+        saved = []
+        for found in entities:
+            entity = session.scalars(
+                select(EntityRecord).where(
+                    EntityRecord.owner_user_id == owner_id,
+                    EntityRecord.entity_type == found["type"],
+                    EntityRecord.name_key == found["name"].lower(),
+                )
+            ).first()
+            if entity is None:
+                entity = EntityRecord(
+                    owner_user_id=owner_id,
+                    name=found["name"],
+                    name_key=found["name"].lower(),
+                    entity_type=found["type"],
+                    created_at=now,
+                )
+                session.add(entity)
+                session.flush()  # gives the new entity its id
+            session.add(ItemEntityRecord(item_id=item_id, entity_id=entity.id))
+            saved.append(_entity_to_dict(entity))
+        session.commit()
+        return saved
+
+
+def list_entities(
+    entity_type: Optional[str] = None,
+    days: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> list:
+    """Entities that appear in at least one item, most-mentioned first.
+    
+    If days, start_date, or end_date is given, only counts items created within that timeframe.
+    """
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        item_count = func.count(ItemEntityRecord.item_id)
+        query = (
+            select(EntityRecord, item_count)
+            .join(ItemEntityRecord, ItemEntityRecord.entity_id == EntityRecord.id)
+            .where(EntityRecord.owner_user_id == owner_id)
+        )
+        needs_item_join = False
+        item_filters = []
+        if days is not None:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            item_filters.append(InboxItemRecord.created_at >= cutoff)
+            needs_item_join = True
+        if start_date:
+            start_iso = start_date if "T" in start_date else f"{start_date}T00:00:00"
+            item_filters.append(InboxItemRecord.created_at >= start_iso)
+            needs_item_join = True
+        if end_date:
+            end_iso = end_date if "T" in end_date else f"{end_date}T23:59:59"
+            item_filters.append(InboxItemRecord.created_at <= end_iso)
+            needs_item_join = True
+
+        if needs_item_join:
+            query = query.join(
+                InboxItemRecord, ItemEntityRecord.item_id == InboxItemRecord.id
+            ).where(*item_filters)
+
+        query = query.group_by(EntityRecord.id).order_by(item_count.desc(), EntityRecord.name)
+        if entity_type:
+            query = query.where(EntityRecord.entity_type == entity_type)
+        return [_entity_to_dict(e, count) for e, count in session.execute(query)]
+
+
+def get_entity_page(
+    entity_id: int,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Optional[dict]:
+    """One entity plus every item that mentions it, newest first (optionally filtered by date range)."""
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        entity = session.get(EntityRecord, entity_id)
+        if entity is None or entity.owner_user_id != owner_id:
+            return None
+        query = (
+            select(InboxItemRecord)
+            .join(ItemEntityRecord, ItemEntityRecord.item_id == InboxItemRecord.id)
+            .where(ItemEntityRecord.entity_id == entity_id)
+        )
+        if start_date:
+            start_iso = start_date if "T" in start_date else f"{start_date}T00:00:00"
+            query = query.where(InboxItemRecord.created_at >= start_iso)
+        if end_date:
+            end_iso = end_date if "T" in end_date else f"{end_date}T23:59:59"
+            query = query.where(InboxItemRecord.created_at <= end_iso)
+
+        items = session.scalars(query.order_by(InboxItemRecord.id.desc()))
+        page = _entity_to_dict(entity)
+        page["items"] = [_item_to_dict(item) for item in items]
+        page["filtered_count"] = len(page["items"])
+        return page
+
+
+# ---------------------------------------------------------------------------
+# Semantic search: embedding cache
+# ---------------------------------------------------------------------------
+
+
+def load_cached_vectors(hashes: list, model: str) -> dict:
+    """{text_hash: vector} for the hashes that are already in the cache."""
+    if not hashes:
+        return {}
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(EmbeddingCacheRecord).where(
+                EmbeddingCacheRecord.model == model,
+                EmbeddingCacheRecord.text_hash.in_(set(hashes)),
+            )
+        )
+        return {row.text_hash: json.loads(row.vector) for row in rows}
+
+
+def save_cached_vectors(vectors: dict, model: str) -> None:
+    from app.retrieval.embeddings import vector_to_text
+
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        for text_hash, vector in vectors.items():
+            # merge = insert, or update if this hash is already there
+            session.merge(
+                EmbeddingCacheRecord(
+                    text_hash=text_hash,
+                    model=model,
+                    vector=vector_to_text(vector),
+                    created_at=now,
+                )
+            )
+        session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Flashcards
+# ---------------------------------------------------------------------------
+
+
+def _flashcard_to_dict(card: FlashcardRecord) -> dict:
+    return {
+        "id": card.id,
+        "item_id": card.item_id,
+        "question": card.question,
+        "answer": card.answer,
+        "box": card.box,
+        "due_date": card.due_date,
+        "last_reviewed_at": card.last_reviewed_at,
+    }
+
+
+def add_flashcards(item_id: int, cards: list, due_date: str) -> Optional[list]:
+    owner_id = require_owner_id()
+    now = datetime.now(timezone.utc).isoformat()
+    with SessionLocal() as session:
+        item = session.get(InboxItemRecord, item_id)
+        if item is None or item.owner_user_id != owner_id:
+            return None
+        records = [
+            FlashcardRecord(
+                owner_user_id=owner_id,
+                item_id=item_id,
+                question=card["question"],
+                answer=card["answer"],
+                box=0,
+                due_date=due_date,
+                created_at=now,
+            )
+            for card in cards
+        ]
+        session.add_all(records)
+        session.commit()
+        return [_flashcard_to_dict(r) for r in records]
+
+
+def list_due_flashcards(today: str) -> list:
+    """Cards due today or earlier, most overdue first."""
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        cards = session.scalars(
+            select(FlashcardRecord)
+            .where(
+                FlashcardRecord.owner_user_id == owner_id,
+                FlashcardRecord.due_date <= today,  # YYYY-MM-DD sorts like a date
+            )
+            .order_by(FlashcardRecord.due_date, FlashcardRecord.id)
+        )
+        return [_flashcard_to_dict(c) for c in cards]
+
+
+def save_flashcard_review(card_id: int, box: int, due_date: str) -> Optional[dict]:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        card = session.get(FlashcardRecord, card_id)
+        if card is None or card.owner_user_id != owner_id:
+            return None
+        card.box = box
+        card.due_date = due_date
+        card.last_reviewed_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return _flashcard_to_dict(card)
+
+
+def get_flashcard(card_id: int) -> Optional[dict]:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        card = session.get(FlashcardRecord, card_id)
+        if card is None or card.owner_user_id != owner_id:
+            return None
+        return _flashcard_to_dict(card)
+
+
+# ---------------------------------------------------------------------------
+# Public API: tokens and webhooks
+# ---------------------------------------------------------------------------
+
+
+def _token_to_dict(token: ApiTokenRecord) -> dict:
+    # Never return token_hash -- not even the hash leaves the server.
+    return {
+        "id": token.id,
+        "name": token.name,
+        "created_at": token.created_at,
+        "last_used_at": token.last_used_at,
+    }
+
+
+def add_api_token(name: str, token_hash: str) -> dict:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        token = ApiTokenRecord(
+            owner_user_id=owner_id,
+            name=name,
+            token_hash=token_hash,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        session.add(token)
+        session.commit()
+        return _token_to_dict(token)
+
+
+def list_api_tokens() -> list:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        tokens = session.scalars(
+            select(ApiTokenRecord).where(ApiTokenRecord.owner_user_id == owner_id)
+        )
+        return [_token_to_dict(t) for t in tokens]
+
+
+def delete_api_token(token_id: int) -> bool:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        token = session.get(ApiTokenRecord, token_id)
+        if token is None or token.owner_user_id != owner_id:
+            return False
+        session.delete(token)
+        session.commit()
+        return True
+
+
+def owner_for_token_hash(token_hash: str) -> Optional[int]:
+    """Which user a token belongs to (None if unknown). Records last use."""
+    with SessionLocal() as session:
+        token = session.scalars(
+            select(ApiTokenRecord).where(ApiTokenRecord.token_hash == token_hash)
+        ).first()
+        if token is None:
+            return None
+        token.last_used_at = datetime.now(timezone.utc).isoformat()
+        session.commit()
+        return token.owner_user_id
+
+
+def _webhook_to_dict(hook: WebhookRecord) -> dict:
+    return {"id": hook.id, "url": hook.url, "event": hook.event, "created_at": hook.created_at}
+
+
+def add_webhook(url: str, event: str, secret: str) -> dict:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        hook = WebhookRecord(
+            owner_user_id=owner_id,
+            url=url,
+            event=event,
+            secret=secret,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        session.add(hook)
+        session.commit()
+        return _webhook_to_dict(hook)
+
+
+def list_webhooks() -> list:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        hooks = session.scalars(
+            select(WebhookRecord).where(WebhookRecord.owner_user_id == owner_id)
+        )
+        return [_webhook_to_dict(h) for h in hooks]
+
+
+def webhooks_for_event(event: str) -> list:
+    """Webhooks (with their secrets, for signing) for the current user."""
+    owner_id = get_current_owner_id()
+    if owner_id is None:
+        return []
+    with SessionLocal() as session:
+        hooks = session.scalars(
+            select(WebhookRecord).where(
+                WebhookRecord.owner_user_id == owner_id, WebhookRecord.event == event
+            )
+        )
+        return [{"url": h.url, "secret": h.secret} for h in hooks]
+
+
+def delete_webhook(webhook_id: int) -> bool:
+    owner_id = require_owner_id()
+    with SessionLocal() as session:
+        hook = session.get(WebhookRecord, webhook_id)
+        if hook is None or hook.owner_user_id != owner_id:
+            return False
+        session.delete(hook)
+        session.commit()
+        return True
