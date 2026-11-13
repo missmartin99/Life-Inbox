@@ -229,3 +229,31 @@ def test_static_assets_include_pagination_helper(client):
     home = client.get("/")
     assert home.status_code == 200
     assert "/static/pagination_state.js" in home.text
+
+
+def test_fetched_page_keeps_every_capture_type():
+    """Links, PDFs, images and voice notes belong in the list, not only text."""
+    result = run_helper(
+        f"""
+const assert = require('assert');
+const P = require({json.dumps(str(HELPER))});
+const state = P.createState(100);
+const rows = [
+  {{id: 5, item_type: 'image', raw_text: null}},
+  {{id: 4, item_type: 'text', raw_text: 'note'}},
+  {{id: 3, item_type: 'pdf', raw_text: null}},
+  {{id: 2, item_type: 'url', raw_text: null}},
+  {{id: 1, item_type: 'voice', raw_text: null}}
+];
+const page = P.applyFetchedPage(state, rows, {{append: false}});
+assert.deepEqual(page.items.map((item) => item.id), [5, 4, 3, 2, 1]);
+assert.deepEqual(state.loadedItems.map((item) => item.id), [5, 4, 3, 2, 1]);
+assert.equal(state.loadedOffset, 5);
+
+// Deleting a non-text capture keeps the next page aligned too.
+assert.equal(P.afterLoadedNoteDeleted(state, 3), true);
+assert.equal(state.loadedOffset, 4);
+console.log(JSON.stringify({{ok: true}}));
+"""
+    )
+    assert result == {"ok": True}

@@ -82,7 +82,7 @@
         <div class="hero-veil" aria-hidden="true"></div>
         <div class="wrap hero-inner">
           <h1 class="hero-title" data-split="glyph">Life Inbox</h1>
-          <p class="sub hero-tagline" data-rev>Capture first. Organize the whole inbox with AI when you are ready.</p>
+          <p class="sub hero-tagline" data-rev>Capture anything. Life Inbox sorts it and finds the things you have to do.</p>
 
           <div class="composer-stage" data-rev>
           <!-- Jin, a grey Persian who naps on the composer (behaviour in playful.js). -->
@@ -236,7 +236,7 @@
 
           <div class="quick-actions" data-rev>
             <button type="button" class="secondary quick quick-ask" data-goto="ask">Ask my inbox</button>
-            <button type="button" class="secondary quick quick-dashboard" data-goto="dashboard">Open dashboard</button>
+            <button type="button" class="secondary quick quick-dashboard" data-goto="dashboard">Open dashboard<span id="quickBadge" class="quick-badge" hidden></span></button>
           </div>
         </div>
       </div>
@@ -248,25 +248,26 @@
         <div class="eyebrow" data-rev><span class="mono">02 · Ask</span></div>
         <div class="head">
           <h2 data-split="words">Ask My Inbox</h2>
-          <p class="sub lede" data-rev>Search and ask questions grounded in your saved notes, URLs, and PDFs.</p>
+          <p class="sub lede" data-rev>Ask about your tasks, or anything in your saved notes, links and files.</p>
         </div>
         <form id="askForm" class="ask-form" onsubmit="askInbox(event)" data-rev>
           <label>
             Question
-            <input id="askQuestion" type="search" maxlength="500" placeholder="What did I plan about car insurance?" required />
+            <input id="askQuestion" type="search" maxlength="500" placeholder="What do I have to do today?" required />
           </label>
           <div class="ask-row">
-            <div class="ask-examples">
-              <button type="button" class="secondary chip" onclick="fillAskExample('What deadlines or renewals did I mention?')">Renewals</button>
-              <button type="button" class="secondary chip" onclick="fillAskExample('What books or articles should I read?')">Reading list</button>
-              <button type="button" class="secondary chip" onclick="fillAskExample('What restaurant recommendations do I have?')">Restaurants</button>
+            <div class="ask-examples" aria-label="Example questions">
+              <button type="button" class="secondary chip" onclick="askExample('What do I have to do today?')">Today</button>
+              <button type="button" class="secondary chip" onclick="askExample('What is overdue?')">Overdue</button>
+              <button type="button" class="secondary chip" onclick="askExample('What is coming up?')">Coming up</button>
+              <button type="button" class="secondary chip" onclick="askExample('List my tasks')">All tasks</button>
             </div>
             <button type="submit" id="askButton" class="magnetic">Ask</button>
           </div>
         </form>
         <p id="askStatus" class="status muted" role="status" aria-live="polite"></p>
         <div id="askOutput" class="panel ask-output" data-rev>
-          <span class="muted">Answers cite inbox items. If evidence is weak, Life Inbox says so instead of guessing.</span>
+          <span class="muted">Answers come only from what you saved, and list the notes they used. If there is not enough to go on, Life Inbox says so instead of guessing.</span>
         </div>
       </div>
     </section>
@@ -276,18 +277,19 @@
       <div class="wrap band">
         <div class="eyebrow" data-rev><span class="mono">03 · Dashboard</span></div>
         <div class="head">
-          <h2 data-split="words">Organized dashboard</h2>
-          <p id="dashboardStatus" class="status muted lede" role="status" aria-live="polite"></p>
+          <h2 data-split="words">Dashboard</h2>
+          <p id="dashboardSummary" class="sub lede" data-rev></p>
         </div>
+        <p id="dashboardStatus" class="status muted" role="status" aria-live="polite"></p>
         <div id="dashboard" class="dashboard" data-rev>
-          <span class="muted">Analyze your inbox to populate topics, priorities, and related items.</span>
+          <span class="muted">Loading your dashboard…</span>
         </div>
       </div>
 
       <div class="wrap band band-follow">
-        <div class="eyebrow" data-rev><span class="mono">Spaces</span></div>
+        <div class="eyebrow" data-rev><span class="mono">Topics</span></div>
         <div class="head">
-          <h2 data-split="words">Topics / spaces</h2>
+          <h2 data-split="words">Topics</h2>
           <form id="topicForm" class="topic-form" onsubmit="createTopic(event)" data-rev>
             <label>
               New topic
@@ -306,12 +308,13 @@
       <div class="wrap band">
         <div class="eyebrow" data-rev><span class="mono">04 · Notes</span></div>
         <div class="head">
-          <h2 data-split="words">Raw saved notes</h2>
+          <h2 data-split="words">Notes</h2>
+          <p id="notesSummary" class="sub lede" data-rev>Everything you have captured, newest first.</p>
         </div>
         <form id="itemSearchForm" class="search-toolbar" onsubmit="applyItemFilters(event)" data-rev>
           <label class="search-field">
             Search
-            <input id="itemSearch" type="search" maxlength="200" placeholder="Text or title" />
+            <input id="itemSearch" type="search" maxlength="200" placeholder="Search your notes" />
           </label>
           <label>
             Type
@@ -325,7 +328,7 @@
             </select>
           </label>
           <label>
-            Category
+            Topic
             <select id="categoryFilter">
               <option value="">All</option>
             </select>
@@ -340,7 +343,7 @@
             </select>
           </label>
           <label>
-            Processing
+            Status
             <select id="processingStatusFilter">
               <option value="">All</option>
               <option value="ready">Ready</option>
@@ -348,12 +351,12 @@
               <option value="failed">Failed</option>
             </select>
           </label>
-          <div class="search-actions">
-            <button type="submit">Search</button>
-            <button type="button" class="secondary" onclick="clearItemFilters()">Clear</button>
+          <div class="search-actions" hidden>
+            <button type="button" id="clearFiltersButton" class="secondary" onclick="clearItemFilters()">Clear filters</button>
           </div>
         </form>
         <p id="searchStatus" class="status muted" role="status" aria-live="polite"></p>
+        <p id="notesStatus" class="status muted" role="status" aria-live="polite"></p>
         <div id="notes" class="card-list"></div>
       </div>
     </section>

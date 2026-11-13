@@ -731,6 +731,7 @@ def get_items(
     processing_status: Optional[str] = Query(None, max_length=100),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    sort: str = Query("oldest", pattern="^(oldest|newest)$"),
 ):
     try:
         return list_items_from_db(
@@ -741,6 +742,7 @@ def get_items(
             processing_status=processing_status,
             limit=limit,
             offset=offset,
+            sort=sort,
         )
     except Exception as exc:
         logger.exception("Failed to load inbox items")

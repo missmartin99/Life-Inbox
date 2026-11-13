@@ -86,11 +86,14 @@ voice capture are planned. PDF originals are stored under `data/uploads/` (or
 `LIFE_INBOX_UPLOAD_DIR`); preview via `GET /api/items/{id}/file`.
 
 `GET /api/items` accepts optional `q`, `item_type`, `category`, `priority`,
-`processing_status`, `limit` (1–500, default 100), and `offset` query
-parameters. Text search is case-insensitive and matches raw text, title,
+`processing_status`, `limit` (1–500, default 100), `offset`, and `sort`
+(`oldest`, the default, or `newest`) query parameters. Text search is case-insensitive and matches raw text, title,
 extracted text, or original filename.
 Category and priority filters use the latest saved analysis insights. The
-browser loads notes in pages of 100 with a “Load more” control.
+browser shows notes newest first, in pages of 100 with a “Load more” control.
+Every capture type is listed (text, links, PDFs, images, voice notes), each
+with its topic and priority once it has been organized. The filters apply as
+soon as they change.
 
 The `/api/notes` routes remain temporarily available as deprecated
 compatibility adapters. They read and write the same `inbox_items` records
@@ -141,8 +144,14 @@ Task APIs:
 - `POST /api/tasks/{id}/reopen` reopens a task;
 - `POST /api/tasks/{id}/dismiss` dismisses a task.
 
-There is no Tasks page in the browser. Open tasks show on the Dashboard and are
-answered through Ask. Dates are taken as read when a note is saved; the app never
+There is no separate Tasks page in the browser. Open tasks are on the
+Dashboard, grouped as Overdue, Today, Coming up and No date. Tick a task to mark
+it done, or use the × to remove one that is not really a task; either can be
+undone for a few seconds. Tasks are also answered through Ask. The Dashboard
+shows counts (notes, open tasks, overdue, due today), high-priority notes,
+recent captures and related notes by title, and refreshes itself every minute.
+
+Dates are taken as read when a note is saved; the app never
 asks the user to confirm them (an ambiguous phrase such as "the 30th" or "this
 weekend" simply gets the best reading).
 

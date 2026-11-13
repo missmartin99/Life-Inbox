@@ -437,7 +437,9 @@ def list_items_from_db(
     processing_status: Optional[str] = None,
     limit: Optional[int] = 100,
     offset: int = 0,
+    sort: str = "oldest",
 ) -> list[dict]:
+    """List inbox items; ``sort`` is "oldest" (default) or "newest" first."""
     owner_id = require_owner_id()
     with SessionLocal() as session:
         statement = select(InboxItemRecord).where(
@@ -489,7 +491,12 @@ def list_items_from_db(
                 InboxItemRecord.processing_status == processing_status
             )
 
-        statement = statement.order_by(InboxItemRecord.id.asc()).offset(offset)
+        ordering = (
+            InboxItemRecord.id.desc()
+            if sort == "newest"
+            else InboxItemRecord.id.asc()
+        )
+        statement = statement.order_by(ordering).offset(offset)
         if limit is not None:
             statement = statement.limit(limit)
         items = session.scalars(statement).all()
@@ -1807,26 +1814,40 @@ def get_organization_dashboard() -> dict:
         items = [
             _item_to_dict(item)
             for item in session.scalars(
-                select(InboxItemRecord).order_by(InboxItemRecord.id.desc())
+                select(InboxItemRecord)
+                .where(InboxItemRecord.owner_user_id == require_owner_id())
+                .order_by(InboxItemRecord.id.desc())
             ).all()
         ]
+        topic_names ={topic["id"]: topic["name"] for topic in topics}
+        pending_ids = {note["id"] for note in list_pending_notes_from_db()}
         high_priority = []
         needs_review = []
+        titles: dict[int, str] = {}
         for item in items:
             insight = insights.get(item["id"])
+            titles[item["id"]] = (
+                (insight["effective_title"] if insight else None)
+                or item["title"]
+                or (item["raw_text"] or "").strip()[:80]
+                or f"Item {item['id']}"
+            )
             if insight is None:
-                needs_review.append(
-                    {
-                        **item,
-                        "reason": "Not yet organized",
-                    }
-                )
+                # Say what is actually going on with the note, in plain words.
+                if item["id"] in pending_ids:
+                    reason = "Waiting to be organized"
+                elif item["processing_status"] == "failed":
+                    reason = "Could not be processed. Retry or delete it"
+                else:
+                    reason = "Has no text to organize yet"
+                needs_review.append({**item, "reason": reason})
                 continue
             card = {
                 **item,
                 "effective_title": insight["effective_title"],
                 "effective_priority": insight["effective_priority"],
                 "effective_topic_id": insight["effective_topic_id"],
+                "topic_name": topic_names.get(insight["effective_topic_id"]),
                 "rationale": insight["rationale"],
                 "has_user_overrides": insight["has_user_overrides"],
             }
@@ -1834,31 +1855,39 @@ def get_organization_dashboard() -> dict:
                 high_priority.append(card)
             if insight["needs_review"]:
                 needs_review.append({**card, "reason": "Marked for review"})
+            elif item["id"] in pending_ids:
+                needs_review.append(
+                    {**card, "reason": "Edited, being organized again"}
+                )
 
         latest = get_latest_successful_analysis()
-        if latest and latest.get("is_stale"):
-            for item in items:
-                if item["id"] in insights:
-                    needs_review.append(
-                        {
-                            **item,
-                            "effective_title": insights[item["id"]][
-                                "effective_title"
-                            ],
-                            "reason": "Analysis stale — re-analyze recommended",
-                        }
-                    )
-                    break
-
         open_tasks = list_tasks_from_db(TASK_OPEN)
-        relations = list_relations_from_db()
+        # Strongest links first, and never a link to a note that was deleted.
+        relations = [
+            {
+                **relation,
+                "title_a": titles[relation["item_id_a"]],
+                "title_b": titles[relation["item_id_b"]],
+            }
+            for relation in sorted(
+                list_relations_from_db(),
+                key=lambda relation: relation["score"],
+                reverse=True,
+            )
+            if relation["item_id_a"] in titles
+            and relation["item_id_b"] in titles
+        ]
         return {
             "topics": topics,
+            "item_count": len(items),
             "high_priority": high_priority[:20],
             "open_tasks": open_tasks[:20],
-            "recently_captured": items[:10],
+            "recently_captured": [
+                {**item, "effective_title": titles[item["id"]]}
+                for item in items[:10]
+            ],
             "needs_review": needs_review[:20],
             "related_items": relations[:20],
             "analysis": latest,
-            "pending_analysis_count": len(list_pending_notes_from_db()),
+            "pending_analysis_count": len(pending_ids),
         }

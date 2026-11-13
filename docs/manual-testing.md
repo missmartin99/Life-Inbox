@@ -14,9 +14,9 @@ Open http://127.0.0.1:8000
 ## Core smoke (Milestone 1+)
 
 - [ ] Home page loads with the Capture, Ask, Dashboard and Notes tabs (no Tasks tab)
-- [ ] Save a note → appears under Raw saved notes
-- [ ] Edit a note → text updates; analysis status becomes stale if prior analysis existed
-- [ ] Delete a note → removed; linked orphan task disappears after analyze+delete
+- [ ] Save a note → appears at the top of the Notes tab (newest first), with its topic and priority tags once organized
+- [ ] Edit a note → text updates, the card shows “edited”, and the message appears on the Notes tab
+- [ ] Delete a note → the card asks “Delete this note?” in place (no browser pop-up); Cancel keeps it, Delete removes it and its task leaves the Dashboard
 - [ ] Save a note → "Organizing your new note with AI…" then "Organized with AI." with no button click; its ToDos appear on the Dashboard under Open Tasks and it appears on the Dashboard
 - [ ] Save three notes quickly → all three get organized, none twice
 - [ ] Edit a note → it is organized again
@@ -26,15 +26,18 @@ Open http://127.0.0.1:8000
 - [ ] A task due "12:15 pm today" is in Today before 12:15 and moves to Overdue after it (check with Ask "what is overdue")
 - [ ] Ask "what do I have to do today" → lists every task due today plus overdue ones, with times; Ask "what is overdue", "what is due tomorrow", "what is coming up" → each lists the matching tasks
 - [ ] Reload page → latest analysis restored; tasks persist
-- [ ] Search/filter notes; Clear resets filters
+- [ ] Notes filters apply as soon as they change; typing in Search filters after a short pause; “Clear filters” appears only while a filter is on
 - [ ] With >100 notes, “Load more” appears and appends
-- [ ] After editing inbox post-analysis, stale banner / status appears
 - [ ] Invalid empty note rejected with friendly status
 - [ ] `/api/health` returns `{"status":"ok"}`
 
 ## Organization smoke (Milestone 2+)
 
-- [ ] Dashboard shows Topics, High Priority, Open Tasks, Recently Captured, Needs Review, Related
+- [ ] Dashboard shows four counts (Notes, Open tasks, Overdue, Due today), Tasks grouped as Overdue / Today / Coming up / No date, High priority, Recently captured and Related notes (by title, not id)
+- [ ] Tick a task → it is struck through and leaves the list; “Undo” brings it back within a few seconds; × removes a task the same way
+- [ ] “Needs attention” only appears when a note is waiting to be organized, failed to process, or was just edited
+- [ ] Click a topic that has notes → the Notes tab opens filtered to that topic
+- [ ] Capture page: “Open dashboard” shows a badge such as “2 overdue” or “1 due today” when something is due
 - [ ] Add a custom topic from the Topics form
 - [ ] Multi-action note creates multiple tasks from one source
 - [ ] Near-duplicate notes appear under Related Items; dismiss removes them from the active list
@@ -43,14 +46,15 @@ Open http://127.0.0.1:8000
 ## Ask My Inbox smoke (Milestone 4+)
 
 - [ ] Save notes mentioning a specific topic (book, renewal, restaurant)
-- [ ] Ask a matching question → answer cites the correct item(s)
+- [ ] Ask a matching question → answer cites the correct item(s) under Sources
+- [ ] The Today / Overdue / Coming up / All tasks buttons ask straight away; task answers show as a numbered list with no repeated Sources block
 - [ ] Ask an unrelated factual question → insufficient evidence message, no citations
 - [ ] Citation “Open source” opens URL or PDF preview where available
 - [ ] `GET /api/search?q=...` returns ranked excerpts
 
 ## PDF capture smoke (Milestone 3B+)
 
-- [ ] Choose a small text-based PDF → item appears with `item_type=pdf`
+- [ ] Choose a small text-based PDF → item appears in the Notes tab with a PDF tag
 - [ ] Processing reaches `ready` with title + extracted preview (or `failed` with error)
 - [ ] “Open PDF” link downloads/previews the stored file
 - [ ] Retry on failed PDF succeeds when the file is readable
