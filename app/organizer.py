@@ -134,6 +134,8 @@ def fallback_analyze(notes: list[dict]) -> dict:
 
     for note in notes:
         text = note["text"]
+        if text.startswith("[Voice note — transcript pending]"):
+            continue  # untranscribed recording: not a real note
         bucket = bucket_for_text(text)
         priority = priority_for_text(text)
         title = text[:72] + ("..." if len(text) > 72 else "")

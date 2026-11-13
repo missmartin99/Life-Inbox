@@ -52,6 +52,7 @@
 
   function setMode(mode) {
     state.mode = mode;
+    window.dispatchEvent(new CustomEvent('jin-mode', {detail: mode}));
     for (const name of ['listening', 'thinking', 'talking']) wrap.classList.remove(name);
     if (mode === 'listening') wrap.classList.add('listening');
     if (mode === 'thinking') wrap.classList.add('thinking');
@@ -72,6 +73,9 @@
   /* ---------- recording ---------- */
   let rec = null;
   const player = new Audio();
+  // Catty voice: a higher, slightly quicker pitch (pitch follows speed when preservesPitch is off).
+  const CAT_PITCH = 1.14;
+  player.preservesPitch = false; player.mozPreservesPitch = false; player.webkitPreservesPitch = false;
   let objectUrl = '';
 
   function stopSpeaking() {
@@ -242,6 +246,7 @@
       if (!window.speechSynthesis) { resolve(); return; }
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
+      utterance.pitch = 1.7; utterance.rate = 1.1;
       const voices = window.speechSynthesis.getVoices() || [];
       const pick = voices.find(v => /en-IN|hi-IN/i.test(v.lang)) || voices.find(v => /^en/i.test(v.lang));
       if (pick) utterance.voice = pick;
@@ -264,6 +269,7 @@
       if (state.mode !== 'speaking') return; // tapped to stop meanwhile
       objectUrl = URL.createObjectURL(blob);
       player.src = objectUrl;
+      player.playbackRate = CAT_PITCH;
       await new Promise((resolve, reject) => {
         player.onended = resolve;
         player.onpause = resolve;
@@ -307,6 +313,7 @@
     }
   }, true);
 
+  state.tap = onTap;                 // used by the Record button in the note box
   setMode('idle');
   if (window.speechSynthesis) window.speechSynthesis.getVoices(); // warm up the fallback voice list
 })();
