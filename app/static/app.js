@@ -1,8 +1,20 @@
 let isSavingNote = false;
 let isWatchingAnalysis = false;
 let rewatchAnalysis = false;
+let notesReloadQueued = false;
+let searchDebounce = 0;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const pendingNoteActions = new Set();
+const pendingTaskActions = new Set();
+// What the AI made of each note (topic, priority), keyed by note id.
+const noteInsights = new Map();
+// Dashboard view state that must survive a re-render.
+const dashboardState = {
+  rendered: '',
+  expanded: new Set(),
+  undo: null,
+  undoTimer: 0
+};
 const itemFilterFields = {
   q: 'itemSearch',
   item_type: 'itemTypeFilter',
@@ -37,7 +49,13 @@ function hasItemFilters() {
   return itemFilterParams().size > 0;
 }
 
-function updateUrl(updates) {
+function updateClearFiltersButton() {
+  const button = document.getElementById('clearFiltersButton');
+  const slot = button ? button.closest('.search-actions') : null;
+  if (slot) slot.hidden = !hasItemFilters();
+}
+
+function updateUrl(updates, {replace = false} = {}) {
   const url = new URL(window.location.href);
   for (const [name, value] of Object.entries(updates)) {
     if (value) {
@@ -46,7 +64,74 @@ function updateUrl(updates) {
       url.searchParams.delete(name);
     }
   }
-  window.history.pushState({}, '', url);
+  if (replace) {
+    window.history.replaceState(window.history.state, '', url);
+  } else {
+    window.history.pushState({}, '', url);
+  }
+}
+
+/* ---------- Dates and times, the way people say them ---------- */
+function parseIsoDate(iso) {
+  const [year, month, day] = String(iso).split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function daysBetween(from, to) {
+  return Math.round((startOfDay(to) - startOfDay(from)) / 86400000);
+}
+
+function clockLabel(hhmm) {
+  const [hours, minutes] = String(hhmm).split(':').map(Number);
+  const suffix = hours < 12 ? 'AM' : 'PM';
+  return `${hours % 12 || 12}:${String(minutes).padStart(2, '0')} ${suffix}`;
+}
+
+// "Just now", "12 min ago", "Today, 2:05 PM", "Yesterday, 9:10 AM", "12 Nov, 9:10 AM".
+function friendlyTime(iso) {
+  const date = new Date(iso);
+  if (!iso || Number.isNaN(date.getTime())) return iso || '';
+  const now = new Date();
+  const minutes = Math.floor((now - date) / 60000);
+  if (minutes >= 0 && minutes < 1) return 'Just now';
+  if (minutes >= 0 && minutes < 60) return `${minutes} min ago`;
+  const clock = date.toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
+  const days = daysBetween(date, now);
+  if (days === 0) return `Today, ${clock}`;
+  if (days === 1) return `Yesterday, ${clock}`;
+  const sameYear = date.getFullYear() === now.getFullYear();
+  const day = date.toLocaleDateString(
+    undefined,
+    sameYear
+      ? {day: 'numeric', month: 'short'}
+      : {day: 'numeric', month: 'short', year: 'numeric'}
+  );
+  return sameYear ? `${day}, ${clock}` : day;
+}
+
+// "Today, 12:15 PM", "Tomorrow", "Fri 20 Nov"; `todayIso` is the server's today.
+function dueLabel(task, todayIso) {
+  if (!task.normalized_due_on) return 'No date';
+  const due = parseIsoDate(task.normalized_due_on);
+  const today = parseIsoDate(todayIso);
+  const days = daysBetween(today, due);
+  let day;
+  if (days === 0) day = 'Today';
+  else if (days === 1) day = 'Tomorrow';
+  else if (days === -1) day = 'Yesterday';
+  else {
+    day = due.toLocaleDateString(
+      undefined,
+      due.getFullYear() === today.getFullYear()
+        ? {weekday: 'short', day: 'numeric', month: 'short'}
+        : {day: 'numeric', month: 'short', year: 'numeric'}
+    );
+  }
+  return task.due_time ? `${day}, ${clockLabel(task.due_time)}` : day;
 }
 
 function syncControlsFromUrl() {
@@ -66,9 +151,32 @@ function syncControlsFromUrl() {
     }
     element.value = value;
   }
+  updateClearFiltersButton();
+}
+
+// Remember each note's topic and priority from the saved analysis, then
+// refresh the tags on any note cards that are already on screen.
+function rememberNoteInsights(data) {
+  noteInsights.clear();
+  for (const bucket of data.buckets || []) {
+    for (const note of bucket.notes || []) {
+      noteInsights.set(note.id, {
+        category: bucket.name,
+        priority: note.priority,
+        title: note.title
+      });
+    }
+  }
+  document.querySelectorAll('.note-tags[data-note-id]').forEach(tags => {
+    const note = itemPagination.loadedItems.find(
+      item => String(item.id) === tags.dataset.noteId
+    );
+    if (note) fillNoteTags(tags, note);
+  });
 }
 
 function populateCategoryFilter(data) {
+  rememberNoteInsights(data);
   const select = document.getElementById('categoryFilter');
   const selected =
     new URLSearchParams(window.location.search).get('category')
@@ -96,15 +204,34 @@ function populateCategoryFilter(data) {
   select.value = selected;
 }
 
-function applyItemFilters(event) {
-  event.preventDefault();
+function applyItemFilters(event, {replace = false} = {}) {
+  if (event) event.preventDefault();
+  window.clearTimeout(searchDebounce);
   const values = {};
   const params = itemFilterParams();
   for (const name of Object.keys(itemFilterFields)) {
     values[name] = params.get(name) || '';
   }
-  updateUrl(values);
+  updateUrl(values, {replace});
+  updateClearFiltersButton();
   loadNotes();
+}
+
+// Open the Notes tab showing one topic (the tab switch itself is done by the
+// data-goto attribute on the element that was clicked).
+function showTopicNotes(name) {
+  for (const elementId of Object.values(itemFilterFields)) {
+    document.getElementById(elementId).value = '';
+  }
+  const select = document.getElementById('categoryFilter');
+  if (!Array.from(select.options).some(option => option.value === name)) {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    select.appendChild(option);
+  }
+  select.value = name;
+  applyItemFilters();
 }
 
 function clearItemFilters() {
@@ -116,6 +243,8 @@ function clearItemFilters() {
       Object.keys(itemFilterFields).map(name => [name, ''])
     )
   );
+  window.clearTimeout(searchDebounce);
+  updateClearFiltersButton();
   loadNotes();
 }
 
@@ -173,7 +302,8 @@ async function addNote() {
     }
     setStatus('noteStatus', 'Note saved.');
     await loadNotes(
-      'Your note was saved, but the list could not refresh. Reload to try again.'
+      'Your note was saved, but the list could not refresh. Reload to try again.',
+      {statusId: 'noteStatus'}
     );
     await loadLatestAnalysis();
   } catch {
@@ -469,27 +599,28 @@ function renderNote(note) {
     text.textContent = note.raw_text;
   }
 
-  const time = document.createElement('div');
+  // Footer: what it is (topic, priority, type), when it was saved, and actions.
+  const meta = document.createElement('div');
+  meta.className = 'note-meta';
+  const tags = document.createElement('span');
+  tags.className = 'note-tags';
+  tags.dataset.noteId = String(note.id);
+  fillNoteTags(tags, note);
+  const time = document.createElement('span');
   time.className = 'time';
-  const status = note.processing_status ? ` · ${note.processing_status}` : '';
-  const error = note.error_message ? ` · ${note.error_message}` : '';
-  time.textContent = `#${note.id} · ${note.item_type}${status}${error} · ${note.created_at}`;
+  const edited = note.item_type === 'text' && note.updated_at;
+  time.textContent = friendlyTime(note.created_at) + (edited ? ' · edited' : '');
+  const savedAt = new Date(note.created_at);
+  time.title = Number.isNaN(savedAt.getTime())
+    ? `Note #${note.id}`
+    : `Note #${note.id} · saved ${savedAt.toLocaleString()}`;
+  meta.append(tags, time);
 
   const actions = document.createElement('div');
   actions.className = 'note-actions';
 
-  if (note.item_type === 'text') {
-    const editButton = actionButton('Edit', 'secondary', () => {
-      showEditNote(note, root);
-    });
-    const deleteButton = actionButton('Delete', 'danger', () => {
-      deleteExistingNote(note, root, editButton, deleteButton);
-    });
-    actions.append(editButton, deleteButton);
-  } else if (
-    ['url', 'pdf', 'image', 'voice'].includes(note.item_type) &&
-    note.processing_status === 'failed'
-  ) {
+  const isCapture = ['url', 'pdf', 'image', 'voice'].includes(note.item_type);
+  if (isCapture && note.processing_status === 'failed') {
     actions.append(
       actionButton('Retry', '', async () => {
         try {
@@ -498,10 +629,11 @@ function renderNote(note) {
             {method: 'POST'},
             'Unable to retry capture processing.'
           );
+          LifeInboxPagination.afterLoadedNoteUpdated(itemPagination, updated);
           root.replaceWith(renderNote(updated));
           const label = captureTypeLabel(note.item_type);
           setStatus(
-            'noteStatus',
+            'notesStatus',
             updated.processing_status === 'ready'
               ? `${label} processed.`
               : `${label} still failed.`
@@ -509,43 +641,8 @@ function renderNote(note) {
           await loadLatestAnalysis();
           await loadDashboard();
         } catch {
-          setStatus('noteStatus', 'Retry failed.', true);
+          setStatus('notesStatus', 'Retry failed.', true);
         }
-      })
-    );
-    actions.append(
-      actionButton('Delete', 'danger', () => {
-        deleteExistingNote(note, root, null, null);
-      })
-    );
-  } else if (
-    (note.item_type === 'image' || note.item_type === 'voice') &&
-    note.processing_status === 'ready'
-  ) {
-    actions.append(
-      actionButton(
-        note.item_type === 'voice' ? 'Edit transcript' : 'Edit OCR text',
-        'secondary',
-        () => {
-          showEditExtractedText(note, root);
-        }
-      )
-    );
-    actions.append(
-      actionButton('Delete', 'danger', () => {
-        deleteExistingNote(note, root, null, null);
-      })
-    );
-  } else if (note.item_type === 'pdf') {
-    actions.append(
-      actionButton('Delete', 'danger', () => {
-        deleteExistingNote(note, root, null, null);
-      })
-    );
-  } else {
-    actions.append(
-      actionButton('Delete', 'danger', () => {
-        deleteExistingNote(note, root, null, null);
       })
     );
   }
@@ -623,8 +720,66 @@ function renderNote(note) {
   };
 
   featureBar.append(makeCardBtn, extractEntBtn, sensBtn);
-  root.append(text, time, featureBar, actions);
+
+  let editButton = null;
+  if (note.item_type === 'text') {
+    editButton = actionButton('Edit', 'secondary', () => {
+      showEditNote(note, root);
+    });
+  } else if (
+    (note.item_type === 'image' || note.item_type === 'voice') &&
+    note.processing_status === 'ready'
+  ) {
+    editButton = actionButton(
+      note.item_type === 'voice' ? 'Edit transcript' : 'Edit OCR text',
+      'secondary',
+      () => {
+        showEditExtractedText(note, root);
+      }
+    );
+  }
+  if (editButton) actions.append(editButton);
+
+  const deleteButton = actionButton('Delete', 'danger', () => {
+    deleteExistingNote(note, root, editButton, deleteButton);
+  });
+  actions.append(deleteButton);
+
+  const foot = document.createElement('div');
+  foot.className = 'note-foot';
+  foot.append(meta, actions);
+
+  root.append(text);
+  if (note.error_message) {
+    const error = document.createElement('div');
+    error.className = 'note-error';
+    error.textContent = note.error_message;
+    root.append(error);
+  }
+  root.append(featureBar, foot);
   return root;
+}
+
+function fillNoteTags(root, note) {
+  root.replaceChildren();
+  const add = (label, kind) => {
+    const tag = document.createElement('span');
+    tag.className = `tag tag-${kind}`;
+    tag.textContent = label;
+    root.appendChild(tag);
+  };
+  if (note.item_type !== 'text') add(captureTypeLabel(note.item_type), 'type');
+  if (note.processing_status === 'failed') {
+    add('Failed', 'failed');
+  } else if (note.processing_status && note.processing_status !== 'ready') {
+    add('Processing', 'busy');
+  }
+  const insight = noteInsights.get(note.id);
+  if (insight) {
+    add(insight.category, 'topic');
+    if (insight.priority === 'High') add('High priority', 'high');
+    if (insight.priority === 'Low') add('Low priority', 'low');
+  }
 }
 
 function showEditExtractedText(note, root) {
@@ -651,7 +806,7 @@ function showEditExtractedText(note, root) {
     saveButton.disabled = true;
     cancelButton.disabled = true;
     saveButton.textContent = 'Saving…';
-    setStatus('noteStatus', 'Saving extracted text…');
+    setStatus('notesStatus', 'Saving extracted text…');
     try {
       const updated = await fetchJson(
         `/api/items/${note.id}/extracted-text`,
@@ -663,10 +818,10 @@ function showEditExtractedText(note, root) {
         'Unable to update extracted text.'
       );
       root.replaceWith(renderNote(updated));
-      setStatus('noteStatus', isVoice ? 'Transcript updated.' : 'Extracted text updated.');
+      setStatus('notesStatus', isVoice ? 'Transcript updated.' : 'Extracted text updated.');
       await loadLatestAnalysis();
     } catch {
-      setStatus('noteStatus', 'Could not update extracted text.', true);
+      setStatus('notesStatus', 'Could not update extracted text.', true);
       saveButton.disabled = false;
       cancelButton.disabled = false;
       saveButton.textContent = isVoice ? 'Save transcript' : 'Save OCR text';
@@ -698,7 +853,7 @@ function showEditNote(note, root) {
   const saveButton = actionButton('Save', '', async () => {
     const text = textarea.value.trim();
     if (!text) {
-      setStatus('noteStatus', 'Edited note text cannot be empty.', true);
+      setStatus('notesStatus', 'Edited note text cannot be empty.', true);
       textarea.focus();
       return;
     }
@@ -708,7 +863,7 @@ function showEditNote(note, root) {
     saveButton.disabled = true;
     cancelButton.disabled = true;
     saveButton.textContent = 'Saving…';
-    setStatus('noteStatus', 'Saving your changes…');
+    setStatus('notesStatus', 'Saving your changes…');
 
     try {
       const updatedNote = await fetchJson(
@@ -722,11 +877,11 @@ function showEditNote(note, root) {
       );
       LifeInboxPagination.afterLoadedNoteUpdated(itemPagination, updatedNote);
       root.replaceWith(renderNote(updatedNote));
-      setStatus('noteStatus', 'Note updated.');
+      setStatus('notesStatus', 'Note updated.');
       await loadLatestAnalysis();
     } catch {
       setStatus(
-        'noteStatus',
+        'notesStatus',
         'We could not update this note. Your changes are still here—please try again.',
         true
       );
@@ -741,7 +896,7 @@ function showEditNote(note, root) {
   const cancelButton = actionButton('Cancel', 'secondary', () => {
     if (pendingNoteActions.has(note.id)) return;
     root.replaceWith(renderNote(note));
-    setStatus('noteStatus', 'Edit cancelled.');
+    setStatus('notesStatus', 'Edit cancelled.');
   });
 
   actions.append(saveButton, cancelButton);
@@ -749,46 +904,67 @@ function showEditNote(note, root) {
   textarea.focus();
 }
 
-async function deleteExistingNote(note, root, editButton, deleteButton) {
+// Deleting asks once, in place: the card's buttons become
+// "Delete this note?  [Delete] [Cancel]" instead of a browser pop-up.
+function deleteExistingNote(note, root, editButton, deleteButton) {
   if (pendingNoteActions.has(note.id)) return;
+  const actions = deleteButton.parentElement;
+  if (!actions || actions.querySelector('.confirm-delete')) return;
 
-  const confirmed = window.confirm(
-    'Delete this item? This action cannot be undone.'
-  );
-  if (!confirmed) return;
+  const others = Array.from(actions.children);
+  const confirmRow = document.createElement('span');
+  confirmRow.className = 'confirm-delete';
+  const question = document.createElement('span');
+  question.className = 'confirm-question';
+  question.textContent = 'Delete this note?';
 
-  pendingNoteActions.add(note.id);
-  if (editButton) editButton.disabled = true;
-  if (deleteButton) {
-    deleteButton.disabled = true;
-    deleteButton.textContent = 'Deleting…';
-  }
-  setStatus('noteStatus', 'Deleting note…');
+  const restore = () => {
+    confirmRow.remove();
+    others.forEach(button => { button.hidden = false; });
+  };
+  const cancelButton = actionButton('Cancel', 'secondary', () => {
+    if (pendingNoteActions.has(note.id)) return;
+    restore();
+    deleteButton.focus();
+  });
+  const confirmButton = actionButton('Delete', 'danger', async () => {
+    if (pendingNoteActions.has(note.id)) return;
+    pendingNoteActions.add(note.id);
+    confirmButton.disabled = true;
+    cancelButton.disabled = true;
+    confirmButton.textContent = 'Deleting…';
+    setStatus('notesStatus', 'Deleting note…');
 
-  try {
-    await fetchJson(
-      `/api/items/${note.id}`,
-      {method: 'DELETE'},
-      'Unable to delete note.'
-    );
-    LifeInboxPagination.afterLoadedNoteDeleted(itemPagination, note.id);
-    root.remove();
-    setStatus('noteStatus', 'Note deleted.');
-    await loadLatestAnalysis('quiet');
-  } catch {
-    setStatus(
-      'noteStatus',
-      'We could not delete this note. It is still here—please try again.',
-      true
-    );
-    if (editButton) editButton.disabled = false;
-    if (deleteButton) {
-      deleteButton.disabled = false;
-      deleteButton.textContent = 'Delete';
+    try {
+      await fetchJson(
+        `/api/items/${note.id}`,
+        {method: 'DELETE'},
+        'Unable to delete note.'
+      );
+      LifeInboxPagination.afterLoadedNoteDeleted(itemPagination, note.id);
+      root.remove();
+      setStatus('notesStatus', 'Note deleted.');
+      updateNotesSummary();
+      showEmptyNotesIfNeeded();
+      await loadLatestAnalysis('quiet');
+      // The note's tasks and topic counts go with it.
+      await Promise.allSettled([loadTopics(), loadDashboard()]);
+    } catch {
+      setStatus(
+        'notesStatus',
+        'We could not delete this note. It is still here—please try again.',
+        true
+      );
+      restore();
+    } finally {
+      pendingNoteActions.delete(note.id);
     }
-  } finally {
-    pendingNoteActions.delete(note.id);
-  }
+  });
+
+  others.forEach(button => { button.hidden = true; });
+  confirmRow.append(question, confirmButton, cancelButton);
+  actions.append(confirmRow);
+  cancelButton.focus();
 }
 
 // New notes are analyzed automatically by the server right after they are
@@ -926,23 +1102,54 @@ function updateLoadMoreButton(failureMessage) {
   root.appendChild(more);
 }
 
+function notesEmptyState(filtered) {
+  return filtered
+    ? '<div class="empty-state"><strong>Nothing matches those filters.</strong><span>Try a different word, or clear the filters.</span></div>'
+    : '<div class="empty-state"><strong>No notes yet.</strong><span>Capture a thought and it shows up here, sorted and ready to search.</span><button type="button" class="secondary" data-goto="capture">Capture a note</button></div>';
+}
+
+// The line under the "Notes" heading: how many notes are showing.
+function updateNotesSummary() {
+  const summary = document.getElementById('notesSummary');
+  if (!summary) return;
+  const count = itemPagination.loadedItems.length;
+  const shown = `${count}${itemPagination.hasMore ? '+' : ''}`;
+  if (hasItemFilters()) {
+    summary.textContent = count
+      ? `${shown} ${count === 1 ? 'note matches' : 'notes match'} your filters.`
+      : 'No notes match your filters.';
+  } else {
+    summary.textContent = count
+      ? `${shown} ${count === 1 ? 'note' : 'notes'}, newest first.`
+      : 'Everything you capture shows up here, newest first.';
+  }
+}
+
+function showEmptyNotesIfNeeded() {
+  const root = document.getElementById('notes');
+  if (root.querySelector('.note') || itemPagination.hasMore) return;
+  root.innerHTML = notesEmptyState(hasItemFilters());
+}
+
 async function loadNotes(
   failureMessage = 'We could not load your notes. Reload to try again.',
-  {append = false} = {}
+  {append = false, statusId = 'notesStatus'} = {}
 ) {
   if (!LifeInboxPagination.beginListRequest(itemPagination)) {
+    // A reload asked for while another list request is running is not lost:
+    // it runs as soon as that request finishes.
+    if (!append) notesReloadQueued = true;
     return false;
   }
 
   const params = itemFilterParams();
+  const filtered = params.size > 0;
   if (!append) {
     LifeInboxPagination.resetForReload(itemPagination);
   }
+  params.set('sort', 'newest');
   params.set('limit', String(itemPagination.pageSize));
   params.set('offset', String(itemPagination.loadedOffset));
-  const filtered = [...params.keys()].some(
-    key => key !== 'limit' && key !== 'offset' && params.get(key)
-  );
   const query = params.toString();
 
   if (append) {
@@ -962,46 +1169,33 @@ async function loadNotes(
       const existingMore = document.getElementById('loadMoreItems');
       if (existingMore) existingMore.remove();
     }
+    setStatus('searchStatus', '');
 
     if (!append && !notes.length) {
-      root.innerHTML = filtered
-        ? '<div class="panel muted">No inbox items match these filters.</div>'
-        : '<div class="panel muted">No saved notes yet. Capture a thought above to get started.</div>';
-      setStatus(
-        'searchStatus',
-        filtered ? 'No results found.' : ''
-      );
+      root.innerHTML = notesEmptyState(filtered);
+      updateNotesSummary();
       return true;
     }
 
-    const {textNotes, hasMore} = LifeInboxPagination.applyFetchedPage(
+    const {items, hasMore} = LifeInboxPagination.applyFetchedPage(
       itemPagination,
       notes,
       {append}
     );
 
-    for (const note of textNotes) {
+    for (const note of items) {
       root.appendChild(renderNote(note));
     }
 
     if (hasMore) {
       updateLoadMoreButton(failureMessage);
     }
-
-    const loadedCount = itemPagination.loadedItems.length;
-    setStatus(
-      'searchStatus',
-      filtered
-        ? `${loadedCount}${hasMore ? '+' : ''} matching item${loadedCount === 1 ? '' : 's'}.`
-        : hasMore
-          ? `Showing ${loadedCount}+ items.`
-          : ''
-    );
+    updateNotesSummary();
     return true;
   } catch {
     if (append) {
       setStatus(
-        'noteStatus',
+        'notesStatus',
         'We could not load more notes. Your current notes are still here—please try again.',
         true
       );
@@ -1013,7 +1207,7 @@ async function loadNotes(
         true
       );
     } else {
-      setStatus('noteStatus', failureMessage, true);
+      setStatus(statusId, failureMessage, true);
     }
     return false;
   } finally {
@@ -1021,8 +1215,14 @@ async function loadNotes(
     if (itemPagination.hasMore) {
       updateLoadMoreButton(failureMessage);
     }
+    if (notesReloadQueued) {
+      notesReloadQueued = false;
+      loadNotes(failureMessage, {statusId});
+    }
   }
 }
+
+const AUTO_TOPIC_NOTE = 'Created from AI organization';
 
 async function loadTopics() {
   try {
@@ -1037,10 +1237,38 @@ async function loadTopics() {
       root.innerHTML = '<div class="panel muted">No topics yet.</div>';
       return;
     }
-    for (const topic of topics) {
+    // Topics that hold notes come first; empty ones stay visible but quiet.
+    const ordered = [...topics].sort(
+      (first, second) =>
+        second.item_count - first.item_count
+        || first.name.localeCompare(second.name)
+    );
+    const most = Math.max(1, ...ordered.map(topic => topic.item_count));
+    for (const topic of ordered) {
+      const hasNotes = topic.item_count > 0;
       const row = document.createElement('div');
-      row.className = 'topic';
-      row.innerHTML = `<strong>${esc(topic.name)}</strong><div class="muted">${topic.item_count} item${topic.item_count === 1 ? '' : 's'}${topic.description ? ` · ${esc(topic.description)}` : ''}</div>`;
+      row.className = hasNotes ? 'topic' : 'topic topic-empty';
+      const count = `${topic.item_count} ${topic.item_count === 1 ? 'note' : 'notes'}`;
+      const description =
+        topic.description && topic.description !== AUTO_TOPIC_NOTE
+          ? ` · ${esc(topic.description)}`
+          : '';
+      const share = Math.round((topic.item_count / most) * 100);
+      row.innerHTML = `<strong>${esc(topic.name)}</strong><div class="muted">${count}${description}</div><span class="topic-bar" aria-hidden="true"><i style="width: ${share}%"></i></span>`;
+      if (hasNotes) {
+        // Opens the Notes tab (data-goto, handled in ui.js) filtered to this topic.
+        row.setAttribute('role', 'button');
+        row.tabIndex = 0;
+        row.dataset.goto = 'notes';
+        row.title = `Show ${topic.name} notes`;
+        row.addEventListener('click', () => showTopicNotes(topic.name));
+        row.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            row.click();
+          }
+        });
+      }
       root.appendChild(row);
     }
   } catch {
@@ -1642,33 +1870,90 @@ function addAgendaItem(event) {
 }
 
 function fillAskExample(text) {
-  const input = document.getElementById('askQuestion');
-  input.value = text;
-  input.focus();
+  const input = document.getElementById("askQuestion");
+  if (input) {
+    input.value = text;
+    const form = document.getElementById("askForm");
+    if (form) form.requestSubmit();
+  }
+}
+
+function askExample(text) {
+  fillAskExample(text);
+}
 }
 
 function renderAskResponse(data) {
   const root = document.getElementById('askOutput');
   root.innerHTML = '';
-  const confidence = document.createElement('div');
-  confidence.className = 'confidence';
-  const modeLabel = data.mode ? ` · ${String(data.mode).replaceAll('_', ' ')}` : '';
-  confidence.textContent = `Confidence: ${data.confidence} · ${data.answer_kind.replace('_', ' ')}${modeLabel}`;
-  const answer = document.createElement('div');
-  answer.style.whiteSpace = 'pre-line';
-  answer.textContent = data.answer;
-  root.append(confidence, answer);
-  if (data.citations && data.citations.length) {
+  const enough = data.confidence !== 'insufficient';
+  const fromTasks = data.mode === 'task_board';
+
+  const badge = document.createElement('div');
+  badge.className = enough ? 'confidence' : 'confidence is-weak';
+  if (!enough) badge.textContent = 'Not enough to go on';
+  else if (fromTasks) badge.textContent = 'From your tasks';
+  else badge.textContent = `From your notes · ${data.confidence} confidence`;
+  root.appendChild(badge);
+
+  // Task answers arrive as "summary:", then "1. task — when · details" lines,
+  // then an optional closing line. Show the numbered lines as a real list.
+  const lines = String(data.answer || '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+  let list = null;
+  for (const line of lines) {
+    const numbered = fromTasks ? line.match(/^\d+\.\s+(.*)$/) : null;
+    if (!numbered) {
+      list = null;
+      const paragraph = document.createElement('p');
+      paragraph.className = 'answer-text';
+      paragraph.textContent = line;
+      root.appendChild(paragraph);
+      continue;
+    }
+    if (!list) {
+      list = document.createElement('ol');
+      list.className = 'answer-tasks';
+      root.appendChild(list);
+    }
+    const cut = numbered[1].lastIndexOf(' — ');
+    const title = cut === -1 ? numbered[1] : numbered[1].slice(0, cut);
+    const detail = cut === -1 ? '' : numbered[1].slice(cut + 3);
+    const item = document.createElement('li');
+    if (/\boverdue\b/.test(detail)) item.classList.add('is-overdue');
+    const name = document.createElement('strong');
+    name.textContent = title;
+    item.appendChild(name);
+    if (detail) {
+      const extra = document.createElement('span');
+      extra.textContent = detail;
+      item.appendChild(extra);
+    }
+    list.appendChild(item);
+  }
+
+  if (!enough) {
+    const hint = document.createElement('p');
+    hint.className = 'answer-hint';
+    hint.textContent = 'Try words you used in the note, or ask about your tasks, for example “what is overdue?”';
+    root.appendChild(hint);
+  }
+
+  // A task answer already lists every task, so its sources would only repeat it.
+  if (!fromTasks && data.citations && data.citations.length) {
     const heading = document.createElement('h3');
-    heading.textContent = 'Sources';
+    heading.textContent = data.citations.length === 1 ? 'Source' : 'Sources';
     root.appendChild(heading);
     for (const cite of data.citations) {
       const block = document.createElement('div');
       block.className = 'citation';
+      const kind = String(cite.source_kind || cite.item_type || 'note').replaceAll('_', ' ');
       const link = cite.preview_url
         ? `<a href="${esc(cite.preview_url)}" target="_blank" rel="noopener">Open source</a>`
         : '';
-      block.innerHTML = `<strong>${esc(cite.title)}</strong> (#${cite.item_id} · ${esc(cite.source_kind)}) ${link}<div>${esc(cite.excerpt)}</div>`;
+      block.innerHTML = `<strong>${esc(cite.title)}</strong><span class="tag tag-type">${esc(kind)}</span>${link}<div>${esc(cite.excerpt)}</div>`;
       root.appendChild(block);
     }
   }
@@ -1680,7 +1965,7 @@ async function askInbox(event) {
   const question = input.value.trim();
   if (!question) return;
   setButtonBusy('askButton', true, 'Thinking…', 'Ask');
-  setStatus('askStatus', 'Searching your inbox…');
+  setStatus('askStatus', 'Looking through your inbox…');
   try {
     const data = await fetchJson(
       '/api/ask',
@@ -1692,9 +1977,9 @@ async function askInbox(event) {
       'Unable to answer from your inbox.'
     );
     renderAskResponse(data);
-    setStatus('askStatus', data.confidence === 'insufficient' ? 'Not enough evidence in your inbox.' : 'Answer ready.');
+    setStatus('askStatus', '');
   } catch {
-    setStatus('askStatus', 'Ask My Inbox failed.', true);
+    setStatus('askStatus', 'We could not answer that just now. Please try again.', true);
   } finally {
     setButtonBusy('askButton', false, 'Thinking…', 'Ask');
   }
@@ -3150,3 +3435,26 @@ document.addEventListener('click', (e) => {
   if (tabName === 'cards') loadCards();
   if (tabName === 'developer') loadDeveloperPanel();
 });
+
+// Notes filters apply as soon as they change; typing in the search box waits
+// for a short pause so every keystroke is not a request.
+for (const elementId of Object.values(itemFilterFields)) {
+  const element = document.getElementById(elementId);
+  if (element && element.tagName === "SELECT") {
+    element.addEventListener("change", () => applyItemFilters());
+  }
+}
+const itemSearchEl = document.getElementById("itemSearch");
+if (itemSearchEl) {
+  itemSearchEl.addEventListener("input", () => {
+    window.clearTimeout(searchDebounce);
+    searchDebounce = window.setTimeout(
+      () => applyItemFilters(null, {replace: true}),
+      300
+    );
+  });
+}
+
+setInterval(() => {
+  if (!document.hidden && typeof loadDashboard === "function") loadDashboard({quiet: true});
+}, 60000);
