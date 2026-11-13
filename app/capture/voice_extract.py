@@ -16,6 +16,7 @@ from app.capture.storage import MAX_AUDIO_BYTES
 
 logger = logging.getLogger(__name__)
 
+PENDING_MARKER = "[Voice note — transcript pending]"
 ALLOWED_AUDIO_EXTENSIONS = {".webm", ".wav", ".mp3", ".m4a", ".ogg", ".mpeg"}
 ALLOWED_AUDIO_MIMES = {
     "audio/webm",
@@ -236,8 +237,9 @@ def process_voice_bytes(
     if transcript:
         raw_text = transcript
     else:
+        # Search, analysis and the assistant skip notes with this marker.
         raw_text = (
-            f"[Voice note — transcript pending]\n"
+            f"{PENDING_MARKER}\n"
             f"Filename: {original_filename}\n"
             f"{note or 'No transcript yet. Edit to add text.'}"
         )

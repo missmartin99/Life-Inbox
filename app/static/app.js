@@ -308,6 +308,11 @@ async function uploadVoiceFile(file, statusMessage) {
 }
 
 async function toggleVoiceRecording() {
+  // Same pipeline as tapping the cat: record, transcribe, Jin answers aloud.
+  if (window.JinVoice && typeof window.JinVoice.tap === 'function') {
+    window.JinVoice.tap();
+    return;
+  }
   if (voiceRecorder && voiceRecorder.state === 'recording') {
     voiceRecorder.stop();
     setButtonBusy('recordVoiceButton', false, 'Recording…', 'Record');
@@ -1159,4 +1164,14 @@ loadDashboard();
 window.addEventListener('popstate', () => {
   syncControlsFromUrl();
   loadNotes();
+});
+
+window.addEventListener('jin-mode', event => {
+  const button = document.getElementById('recordVoiceButton');
+  if (!button) return;
+  const mode = event.detail;
+  button.textContent = mode === 'listening' ? 'Stop'
+    : mode === 'thinking' ? 'Thinking…'
+    : mode === 'speaking' ? 'Stop talking' : 'Record';
+  setStatus('voiceStatus', mode === 'listening' ? 'Listening… pause when you are done.' : '');
 });

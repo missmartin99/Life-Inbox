@@ -14,12 +14,22 @@ from app.assistant import (
     SpeechError,
     classify_utterance,
     has_devanagari,
+    is_on_topic,
     speech_configured,
     synthesize_speech,
     to_speech,
 )
 from app.capture.voice_extract import transcribe_audio, validate_audio_upload
-from app.database import add_item_to_db
+from datetime import date
+
+from app.assistant_actions import match_task, parse_task_command, snooze_date
+from app.database import (
+    TASK_COMPLETED,
+    add_item_to_db,
+    list_tasks_from_db,
+    set_task_status,
+    snooze_task_in_db,
+)
 from app.retrieval.ask import build_grounded_answer
 
 logger = logging.getLogger(__name__)
@@ -63,6 +73,41 @@ def _heard(file: Optional[UploadFile], text: Optional[str]) -> str:
     raise HTTPException(status_code=400, detail="Send a recording or some text.")
 
 
+def _reply(transcript: str, intent: str, reply: str) -> dict:
+    return {
+        "transcript": transcript, "intent": intent, "reply": reply,
+        "speech": reply, "citations": [], "saved_item_id": None,
+    }
+
+
+def _run_task_command(command: dict, transcript: str) -> Optional[dict]:
+    """Mark a task done or snooze it. None = not really a task command."""
+    try:
+        tasks = list_tasks_from_db()
+    except Exception:
+        logger.exception("Assistant could not load tasks")
+        return None
+    task, candidates = match_task(command["target"], tasks)
+    if task is None and not candidates:
+        return None  # e.g. "move the car" is not about any task: carry on normally
+    if task is None:
+        names = " or ".join(f"“{c['text'][:40]}”" for c in candidates[:3])
+        return _reply(transcript, "clarify", f"Mrrow? Which one: {names}?")
+    try:
+        if command["action"] == "done":
+            set_task_status(task["id"], TASK_COMPLETED)
+            return _reply(transcript, "task_done", f"Purrfect. I marked “{task['text'][:60]}” as done.")
+        until = snooze_date(command["when"], date.today())
+        if until is None:
+            return _reply(transcript, "clarify", "Until when? Try tomorrow, next week, or a weekday.")
+        snooze_task_in_db(task["id"], until.isoformat())
+    except Exception:
+        logger.exception("Assistant task command failed")
+        raise HTTPException(status_code=500, detail="I couldn't update that task. Please try again.")
+    day = "tomorrow" if (until - date.today()).days == 1 else until.strftime("%A %d %B")
+    return _reply(transcript, "task_snoozed", f"Okay, I'll nudge you about “{task['text'][:60]}” {day}.")
+
+
 @router.post("/api/assistant/voice")
 def assistant_voice(
     file: Optional[UploadFile] = File(default=None),
@@ -74,6 +119,11 @@ def assistant_voice(
     answered from the user's own saved items, with sources.
     """
     transcript = _heard(file, text)
+    command = parse_task_command(transcript)
+    if command is not None:
+        result = _run_task_command(command, transcript)
+        if result is not None:
+            return result
     intent, cleaned = classify_utterance(transcript)
 
     if intent == "capture":
@@ -118,6 +168,15 @@ def assistant_voice(
             status_code=500,
             detail="I couldn't answer that from your inbox. Please try again.",
         ) from exc
+    if (
+        answer.get("mode") != "task_board"
+        and answer.get("citations")
+        and not is_on_topic(cleaned, answer["citations"])
+    ):
+        return _reply(
+            transcript, "ask",
+            "Mew, I couldn't find anything about that in your inbox.",
+        )
     citations = [
         {
             "item_id": c["item_id"],

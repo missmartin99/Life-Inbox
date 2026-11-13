@@ -16,8 +16,10 @@ Environment variables:
 
 from __future__ import annotations
 
+import io
 import logging
 import os
+import wave
 import shutil
 import subprocess
 import tempfile
@@ -57,8 +59,25 @@ def _language_code(model: str) -> str:
     return raw.split(",")[0].strip() or "hi-IN"
 
 
+def _usable_wav_as_is(data: bytes) -> bool:
+    """True for a 16-bit mono WAV short enough to send without ffmpeg."""
+    try:
+        with wave.open(io.BytesIO(data)) as wav:
+            seconds = wav.getnframes() / float(wav.getframerate() or 1)
+            return (
+                wav.getnchannels() == 1
+                and wav.getsampwidth() == 2
+                and wav.getframerate() in (8000, 16000, 22050, 24000, 44100, 48000)
+                and 0 < seconds <= SEGMENT_SECONDS
+            )
+    except (wave.Error, EOFError):
+        return False
+
+
 def _convert_to_wav_segments(data: bytes, filename: str) -> list[bytes]:
     """Convert any supported input to 16 kHz mono WAV segments of ~25 s."""
+    if _usable_wav_as_is(data):
+        return [data]  # the cat's own recordings: no ffmpeg needed
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise GnaniError(
