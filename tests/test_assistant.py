@@ -229,3 +229,70 @@ def test_speak_returns_audio_or_501(api, monkeypatch):
     assert response.status_code == 200
     assert response.headers["content-type"] == "audio/mpeg"
     assert response.content == b"ID3xyz"
+
+
+# --- reminders and Jin's manner ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "spoken",
+    [
+        "Jin, remind me about washing my car at 10pm",
+        "Hey Jin can you remind me about washing my car at 10 PM?",
+    ],
+)
+def test_jin_name_and_politeness_do_not_turn_a_reminder_into_a_question(spoken):
+    intent, cleaned = assistant.classify_utterance(spoken)
+    assert intent == "capture"
+    assert cleaned.lower().startswith("remind me about washing my car")
+
+
+def test_parse_reminder_understands_time_and_task():
+    from datetime import datetime
+
+    now = datetime(2026, 11, 13, 13, 0)
+    r = assistant.parse_reminder("remind me about washing my car at 10pm", now=now)
+    assert r["task"] == "Washing my car"
+    assert r["iso"] == "2026-11-13T22:00"
+    assert r["spoken"] == "about washing your car tonight at 10 PM"
+    # A time already gone today means tomorrow.
+    r = assistant.parse_reminder("remind me to call mom at 9am", now=now)
+    assert r["iso"] == "2026-11-14T09:00"
+    # No am/pm: the next occurrence of that hour.
+    assert assistant.parse_reminder("remind me to eat at 6", now=now)["iso"] == "2026-11-13T18:00"
+    assert assistant.parse_reminder("remind me to buy milk", now=now)["when"] is None
+    assert assistant.parse_reminder("buy milk") is None
+
+
+def test_voice_reminder_creates_a_timed_task(api):
+    client, _ = api
+    body = client.post(
+        "/api/assistant/voice",
+        data={"text": "Jin, remind me to wash my car at 10pm tomorrow"},
+    ).json()
+    assert body["intent"] == "reminder" and body["task_id"]
+    assert "wash your car" in body["reply"]
+    tasks = client.get("/api/tasks").json()
+    task = next(t for t in tasks if t["id"] == body["task_id"])
+    assert task["text"] == "Wash my car"
+    assert "10 pm" in task["timing_text"]
+    assert task["status"] == "open"
+
+
+def test_no_match_sounds_human(api):
+    client, _ = api
+    body = client.post(
+        "/api/assistant/voice", data={"text": "what did the zebra say about quantum socks?"}
+    ).json()
+    assert "inbox to answer that" not in body["reply"]
+    assert body["reply"] == body["speech"]
+
+
+def test_extractive_answer_drops_the_robotic_lead_in():
+    reply, speech = assistant.humanize_answer({
+        "answer": "Based on your inbox item “Item 4” (original text): Rohan likes tea. "
+                  "Also related: “Item 5” — more",
+        "confidence": "medium",
+    })
+    assert "Based on your inbox item" not in reply + speech
+    assert "Rohan likes tea." in speech and "Also related" not in reply

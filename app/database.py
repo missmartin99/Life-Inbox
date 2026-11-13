@@ -2125,6 +2125,37 @@ def snooze_task_in_db(task_id: int, until_iso_date: str) -> Optional[dict]:
         return _task_to_dict(session, task)
 
 
+def add_reminder_task(
+    item_id: int, text: str, when: Optional[str], reminder_iso: Optional[str] = None
+) -> dict:
+    """Create an open task (with its due date/time) straight from a voice reminder."""
+    from app.attention.dates import parse_timing_phrase
+
+    now = datetime.now(timezone.utc).isoformat()
+    parsed = parse_timing_phrase(when) if when else None
+    with SessionLocal() as session:
+        task = TaskRecord(
+            text=text,
+            priority="Medium",
+            timing_text=when,
+            ai_timing_text=when,
+            timing_confirmed=1 if when else 0,
+            due_on=parsed.normalized_iso if parsed else None,
+            due_confidence=parsed.confidence if parsed else None,
+            reminder_at=reminder_iso,
+            status=TASK_OPEN,
+            dedup_key=_task_dedup_key([item_id], text) + f":{now}",
+            owner_user_id=require_owner_id(),
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(task)
+        session.flush()
+        session.add(TaskSourceItemRecord(task_id=task.id, item_id=item_id))
+        session.commit()
+        return _task_to_dict(session, task)
+
+
 def set_task_reminder_in_db(task_id: int, reminder_iso_date: str) -> Optional[dict]:
     owner_id = require_owner_id()
     with SessionLocal() as session:

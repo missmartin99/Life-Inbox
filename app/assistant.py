@@ -143,6 +143,229 @@ def has_devanagari(text: str) -> bool:
     return any("\u0900" <= ch <= "\u097f" for ch in text)
 
 
+# --- reminders ---------------------------------------------------------------
+
+_REMIND_RE = re.compile(
+    r"^(?:remind me|remind us|yaad dila(?:na)?(?: do)?)\b[\s,:-]*"
+    r"(?P<link>to|about|that|of)?\b[\s,:-]*",
+    re.IGNORECASE,
+)
+_CLOCK_RE = re.compile(
+    r"\b(?:at\s+|by\s+)?(?P<h>\d{1,2})(?:[:.](?P<m>\d{2}))?\s*(?P<ap>a\.?m\.?|p\.?m\.?)(?![a-z])",
+    re.IGNORECASE,
+)
+_O_CLOCK_RE = re.compile(r"\b(?:at\s+)(?P<h>\d{1,2})(?:[:.](?P<m>\d{2}))?\b(?!\s*(?:am|pm|a\.m|p\.m))", re.IGNORECASE)
+_RELATIVE_RE = re.compile(
+    r"\bin\s+(?P<n>\d{1,3}|an?|half an?)\s*(?P<unit>minutes?|mins?|hours?|hrs?)\b",
+    re.IGNORECASE,
+)
+_DAY_RE = re.compile(
+    r"\b(?P<day>today|tonight|tomorrow|day after tomorrow|"
+    r"(?:next\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b",
+    re.IGNORECASE,
+)
+_PRONOUNS = {"my": "your", "me": "you", "mine": "yours", "myself": "yourself", "i": "you", "i'm": "you're"}
+
+
+def _clock(h: int, m: int, ap: Optional[str]) -> Optional[tuple[int, int]]:
+    ap = (ap or "").lower().replace(".", "")
+    if m > 59 or h > 23:
+        return None
+    if ap:
+        if not 1 <= h <= 12:
+            return None
+        h = h % 12 + (12 if ap == "pm" else 0)
+    return h, m
+
+
+def _say_time(h: int, m: int) -> str:
+    suffix = "AM" if h < 12 else "PM"
+    hour = h % 12 or 12
+    return f"{hour} {suffix}" if m == 0 else f"{hour}:{m:02d} {suffix}"
+
+
+def _tidy_task(text: str) -> str:
+    text = re.sub(r"\s+", " ", text).strip(" ,.-:")
+    text = re.sub(r"^(?:to|about|that|of)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+(?:at|by|on|in|for)$", "", text, flags=re.IGNORECASE)
+    return text[:1].upper() + text[1:] if text else text
+
+
+def parse_reminder(text: str, now=None) -> Optional[dict]:
+    """Understand "remind me to wash my car at 10pm".
+
+    Returns None when `text` is not a reminder. Otherwise a dict with:
+      task      tidy task wording ("Wash my car")
+      when      phrase the date parser understands ("today at 10 pm") or None
+      iso       "YYYY-MM-DDTHH:MM" when a clock time is known, else None
+      spoken    how Jin says it back ("to wash your car tonight at 10 PM")
+    """
+    from datetime import datetime, timedelta
+
+    from app.attention.dates import now_in_configured_tz, today_in_configured_tz
+
+    match = _REMIND_RE.match(text.strip())
+    if not match:
+        return None
+    link = (match.group("link") or "").lower()
+    rest = text.strip()[match.end():]
+    now = now or now_in_configured_tz()
+    today = now.date() if hasattr(now, "date") else today_in_configured_tz()
+
+    clock: Optional[tuple[int, int]] = None
+    ambiguous = False
+    day_word: Optional[str] = None
+    target_date = None
+
+    rel = _RELATIVE_RE.search(rest)
+    if rel:
+        raw = rel.group("n").lower()
+        n = 0.5 if raw.startswith("half") else 1 if raw in ("a", "an") else int(raw)
+        delta = timedelta(hours=n) if rel.group("unit").lower().startswith(("h")) else timedelta(minutes=n)
+        due = (now + delta).replace(second=0, microsecond=0)
+        target_date, clock = due.date(), (due.hour, due.minute)
+        rest = rest[: rel.start()] + " " + rest[rel.end():]
+    else:
+        c = _CLOCK_RE.search(rest) or _O_CLOCK_RE.search(rest)
+        if c:
+            ap = c.groupdict().get("ap")
+            parsed = _clock(int(c.group("h")), int(c.group("m") or 0), ap)
+            if parsed:
+                clock = parsed
+                ambiguous = not ap and 1 <= int(c.group("h")) <= 11
+                rest = rest[: c.start()] + " " + rest[c.end():]
+        d = _DAY_RE.search(rest)
+        if d:
+            day_word = d.group("day").lower()
+            rest = rest[: d.start()] + " " + rest[d.end():]
+
+    task = _tidy_task(rest)
+    if not task:
+        return None
+
+    if ambiguous and clock and day_word in (None, "today", "tonight"):
+        # "at 6" with no am/pm: take the next 6 o'clock that is still ahead.
+        h, m = clock
+        later = [(hh, m) for hh in (h, h + 12) if (hh, m) > (now.hour, now.minute)]
+        if later:
+            clock = later[0]
+        else:
+            clock = (h, m)
+            day_word = day_word or "tomorrow"
+
+    if target_date is None:
+        if day_word in ("tomorrow",):
+            target_date = today + timedelta(days=1)
+        elif day_word == "day after tomorrow":
+            target_date = today + timedelta(days=2)
+        elif day_word in ("today", "tonight"):
+            target_date = today
+        elif day_word:  # weekday name
+            names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            wanted = names.index(day_word.replace("next ", ""))
+            ahead = (wanted - today.weekday()) % 7
+            if ahead == 0 or day_word.startswith("next "):
+                ahead = ahead or 7
+            target_date = today + timedelta(days=ahead)
+        elif clock:
+            # Bare time: the next time that clock reads.
+            target_date = today
+            if (clock[0], clock[1]) <= (now.hour, now.minute):
+                target_date = today + timedelta(days=1)
+
+    if target_date is None:
+        return {"task": task, "when": None, "iso": None, "spoken": _spoken(link, task, None, None, today)}
+
+    if clock:
+        h, m = clock
+        label = _say_time(h, m)
+        when = f"{target_date.isoformat()} at {label.lower()}"
+        iso = f"{target_date.isoformat()}T{h:02d}:{m:02d}"
+    else:
+        when = target_date.isoformat()
+        iso = None
+    return {
+        "task": task,
+        "when": when,
+        "iso": iso,
+        "spoken": _spoken(link, task, target_date, clock, today, tonight=day_word == "tonight"),
+    }
+
+
+def _spoken(link, task, target_date, clock, today, tonight=False) -> str:
+    from datetime import timedelta
+
+    body = " ".join(_PRONOUNS.get(w.lower(), w) for w in task.split())
+    body = body[:1].lower() + body[1:]
+    when = ""
+    if target_date is not None:
+        if target_date == today:
+            day = "tonight" if (tonight or (clock and clock[0] >= 19)) else "today"
+        elif target_date == today + timedelta(days=1):
+            day = "tomorrow"
+        else:
+            day = "on " + target_date.strftime("%A")
+        when = f" {day}" + (f" at {_say_time(*clock)}" if clock else "")
+    return f"{link or 'about'} {body}{when}".strip()
+
+
+# --- how Jin talks -----------------------------------------------------------
+
+import random  # noqa: E402
+
+_SAVED = [
+    "Got it, saved.",
+    "Done. It's in your inbox.",
+    "Okay, I've noted that down.",
+    "Sure thing, saved it for you.",
+]
+_SAVED_HI = ["ठीक है, मैंने इसे सेव कर लिया है।", "हो गया, सेव कर दिया।", "ठीक है, नोट कर लिया।"]
+_REMINDER_SET = [
+    "Okay, I'll remind you {spoken}.",
+    "Sure, I'll remind you {spoken}.",
+    "Got it. I'll remind you {spoken}.",
+    "Done! I'll remind you {spoken}.",
+]
+_REMINDER_NO_TIME = [
+    "Okay, I've added that to your tasks. Tell me when you'd like the reminder?",
+    "Noted! Want to tell me a time, so I can remind you?",
+]
+_WHAT_TO_SAVE = ["Sure, what should I save?", "Of course. What would you like me to note down?"]
+_DIDNT_CATCH = ["Sorry, I didn't quite catch that. Could you say it again?", "Hmm, I missed that. One more time?"]
+_NOTHING_FOUND = [
+    "Hmm, I couldn't find anything about that in your notes.",
+    "I looked, but I don't see anything about that in your inbox yet.",
+    "Nothing on that in your notes, I'm afraid.",
+]
+_SAVE_FAILED = "Oops, I couldn't save that. Mind trying again?"
+_ANSWER_FAILED = "Sorry, I had trouble looking that up. Can you try again?"
+
+
+def pick(options: list[str], **kwargs) -> str:
+    return random.choice(options).format(**kwargs)
+
+
+def saved_reply(hindi: bool = False) -> str:
+    return random.choice(_SAVED_HI if hindi else _SAVED)
+
+
+_LEAD_RE = re.compile(r"^Based on your inbox item “[^”]*” \([^)]*\):\s*")
+
+
+def humanize_answer(answer: dict) -> tuple[str, str]:
+    """Return (reply, speech) that sound like a friend, not a search engine."""
+    text = (answer.get("answer") or "").strip()
+    if answer.get("confidence") == "insufficient" or not text:
+        line = pick(_NOTHING_FOUND)
+        return line, line
+    if _LEAD_RE.match(text):
+        lead = _LEAD_RE.sub("", text, count=1)
+        lead = lead.split(" Also related:")[0].strip()
+        intro = random.choice(["Here's what I found.", "So, from your notes:", "Okay, I found this."])
+        return f"{intro} {lead}", f"{intro} {to_speech(lead, 300)}"
+    return text, to_speech(text)
+
+
 # --- speech-friendly text ---------------------------------------------------
 
 
