@@ -170,7 +170,6 @@
     }, 300);
 
     setMode('listening');
-    show('I’m listening…');
   }
 
   function cancelListening() {
@@ -214,7 +213,7 @@
   /* ---------- asking and speaking ---------- */
   async function ask(form) {
     setMode('thinking');
-    show('hmm…');
+    bubble.classList.remove('show');
     let data;
     try {
       const response = await fetch('/api/assistant/voice', {method: 'POST', body: form});
@@ -232,9 +231,9 @@
     if (data.saved_item_id && typeof window.loadNotes === 'function') {
       try { window.loadNotes(); } catch (e) { /* list refresh is best effort */ }
     }
+    // Jin answers out loud only: no caption bubble for her replies.
     const reply = data.reply || '';
-    const shown = reply.length > 220 ? `${reply.slice(0, 217)}…` : reply;
-    show(shown || 'Done.');
+    bubble.classList.remove('show');
     await speak(data.speech || reply);
     setMode('idle');
     window.clearTimeout(hideTimer);
