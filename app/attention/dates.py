@@ -11,12 +11,53 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 
+DEFAULT_TIMEZONE = "Asia/Kolkata"  # India time, unless LIFE_INBOX_TIMEZONE says otherwise
+
+
 def configured_timezone() -> ZoneInfo:
-    name = os.getenv("LIFE_INBOX_TIMEZONE", "UTC").strip() or "UTC"
+    name = os.getenv("LIFE_INBOX_TIMEZONE", DEFAULT_TIMEZONE).strip() or DEFAULT_TIMEZONE
     try:
         return ZoneInfo(name)
     except Exception:
-        return ZoneInfo("UTC")
+        return ZoneInfo(DEFAULT_TIMEZONE)
+
+
+END_OF_DAY = time(23, 59)
+
+
+def timezone_label() -> str:
+    """Short name of the app's time zone, e.g. "IST"."""
+    return now_in_configured_tz().tzname() or str(configured_timezone())
+
+
+def format_clock(value: time) -> str:
+    """15:00 -> "3:00 PM"."""
+    hour = value.hour % 12 or 12
+    return f"{hour}:{value.minute:02d} {'AM' if value.hour < 12 else 'PM'}"
+
+
+def format_deadline(due: date, due_time: Optional[time] = None) -> str:
+    """A full, unambiguous deadline: "Fri, 13 Nov 2026, 11:59 PM IST".
+
+    Without a time of day a task is due by the end of that day.
+    """
+    clock = format_clock(due_time or END_OF_DAY)
+    return f"{due.strftime('%a')}, {due.day} {due.strftime('%b %Y')}, {clock} {timezone_label()}"
+
+
+def format_timestamp(value: Optional[str]) -> Optional[str]:
+    """A stored UTC timestamp shown in the app's time zone: "12 Nov 2026, 4:59 PM IST"."""
+    if not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    local = moment.astimezone(configured_timezone())
+    zone = local.tzname() or str(configured_timezone())
+    return f"{local.day} {local.strftime('%b %Y')}, {format_clock(local.time())} {zone}"
 
 
 def now_in_configured_tz() -> datetime:
@@ -76,8 +117,8 @@ def parse_time_of_day(phrase: Optional[str]) -> Optional[time]:
             hour += 12
         if meridiem == "am" and hour == 12:
             hour = 0
-    elif hour == 12 or 13 <= hour <= 23:
-        pass  # unambiguous on a 24-hour clock
+    elif hour in (0, 12) or 13 <= hour <= 23:
+        pass  # unambiguous on a 24-hour clock ("00:30" is just after midnight)
     else:
         return None
     return time(hour, minute)
@@ -109,7 +150,16 @@ _ORDINAL = re.compile(
     r"\b(\d{1,2})(?:st|nd|rd|th)\b(?:\s+of\s+(this|next|the)\s+month)?",
     re.I,
 )
-_IN_DAYS = re.compile(r"\bin\s+(\d+)\s+days?\b", re.I)
+# "in 3 days", "in a week", "within two weeks", "in a month", "in a couple of days"
+_IN_SPAN = re.compile(
+    r"\b(?:in|within)\s+(\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"(?:a\s+)?couple\s+(?:of\s+)?|(?:a\s+)?few)\s*(day|week|fortnight|month)s?\b",
+    re.I,
+)
+_SPAN_NUMBERS = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
 _WEEKDAY = re.compile(
     r"\b(next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
     re.I,
@@ -281,15 +331,16 @@ def _parse_date_phrase(
             note="Read as day/month/year; confirm." if ambiguous else None,
         )
 
-    in_days = _IN_DAYS.search(original)
-    if in_days:
-        due = ref + timedelta(days=int(in_days.group(1)))
+    span = _IN_SPAN.search(original)
+    if span:
+        due, vague = _after_span(ref, span.group(1), span.group(2))
         return ParsedTiming(
             original_phrase=original,
             due_date=due,
-            confidence="high",
-            needs_confirmation=False,
+            confidence="medium" if vague else "high",
+            needs_confirmation=vague,
             normalized_iso=due.isoformat(),
+            note="\u201cA few\u201d read as 3; confirm if needed." if vague else None,
         )
 
     mdy = _MDY.search(original)
@@ -444,6 +495,29 @@ def _parse_date_phrase(
     )
 
 
+def _after_span(ref: date, amount: str, unit: str) -> tuple[date, bool]:
+    """ref + "3 days" / "a week" / "a month". Returns (date, is_vague)."""
+    words = " ".join(amount.lower().split())
+    vague = "few" in words
+    if words.isdigit():
+        count = int(words)
+    elif "couple" in words:
+        count = 2
+    elif vague:
+        count = 3
+    else:
+        count = _SPAN_NUMBERS[words]
+    unit = unit.lower()
+    if unit == "month":
+        month_index = ref.year * 12 + ref.month - 1 + count
+        year, month = divmod(month_index, 12)
+        month += 1
+        day = min(ref.day, calendar.monthrange(year, month)[1])  # 31 Jan + 1 month = 28/29 Feb
+        return date(year, month, day), vague
+    days = {"day": 1, "week": 7, "fortnight": 14}[unit] * count
+    return ref + timedelta(days=days), vague
+
+
 def parse_timing_phrase(
     phrase: Optional[str],
     *,
@@ -488,3 +562,61 @@ def classify_attention_bucket(
             return "overdue"
         return "today"
     return "upcoming"
+
+
+# --- finding the date words inside a longer note -----------------------------------
+
+_WEEKDAY_NAMES = r"monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+_LEAD = r"(?:(?:due|by|on|before|until|till|for|from)\s+)?"
+# Same rules as _parse_date_phrase, in the same order, but only the ones that
+# are safe to read inside free text. Left out on purpose: "tom" (usually a
+# name, not "tomorrow"), "asap"/"urgent" (no real date), "yesterday" (past),
+# and a bare "1st" (often "my 1st draft").
+_FINDERS = tuple(
+    re.compile(_LEAD + core, re.I)
+    for core in (
+        r"\bday after tomorrow\b",
+        r"\b(?:today|tonight|this (?:morning|afternoon|evening)|end of (?:the )?day|eod)\b",
+        r"\b(?:tomorrow|tmrw|tmr)\b",
+        r"\b(?:this )?weekend\b",
+        _ISO.pattern,
+        _NUMERIC_DATE.pattern,
+        _IN_SPAN.pattern,
+        _MDY.pattern,
+        _DMY.pattern,
+        r"\b(?:the\s+)?\d{1,2}(?:st|nd|rd|th)\s+of\s+(?:this|next|the)\s+month\b",
+        r"\bthe\s+\d{1,2}(?:st|nd|rd|th)\b",
+        r"\b(?:end of (?:the |this )?month|eom)\b",
+        r"\bnext week\b",
+        r"\b(?:this week|end of (?:the |this )?week)\b",
+        rf"\b(?:this\s+|next\s+)?(?:{_WEEKDAY_NAMES})\b",
+    )
+)
+_TIME_FINDER = re.compile(
+    r"(?:\bat\s+)?(?:\b\d{1,2}:\d{2}\s*(?:am|pm|a\.m\.|p\.m\.)?|\b\d{1,2}\s*(?:am|pm|a\.m\.|p\.m\.)|\bnoon\b)",
+    re.I,
+)
+
+
+def find_timing_phrase(
+    text: Optional[str], *, reference: Optional[date] = None
+) -> Optional[str]:
+    """The words in a note that say when, e.g. "in a week" or "by Friday at 5pm".
+
+    Returns None when the note names no date. The phrase always parses (with
+    parse_timing_phrase) to a real date, and keeps the time of day if the note
+    gives one.
+    """
+    if not text or not text.strip():
+        return None
+    for finder in _FINDERS:
+        for match in finder.finditer(text):
+            phrase = " ".join(match.group(0).split())
+            if parse_timing_phrase(phrase, reference=reference).due_date is None:
+                continue
+            if parse_time_of_day(phrase) is None:
+                clock = _TIME_FINDER.search(text)
+                if clock and parse_time_of_day(clock.group(0)) is not None:
+                    phrase = f"{phrase} at {' '.join(clock.group(0).split()).removeprefix('at ').strip()}"
+            return phrase
+    return None

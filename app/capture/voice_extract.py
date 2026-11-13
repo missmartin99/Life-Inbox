@@ -7,6 +7,11 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from app.capture.gnani_stt import (
+    GnaniError,
+    gnani_configured,
+    transcribe_with_gnani,
+)
 from app.capture.storage import (
     MAX_AUDIO_BYTES,
     normalize_filename,
@@ -15,6 +20,7 @@ from app.capture.storage import (
 
 logger = logging.getLogger(__name__)
 
+PENDING_MARKER = "[Voice note — transcript pending]"
 ALLOWED_AUDIO_EXTENSIONS = {".webm", ".wav", ".mp3", ".m4a", ".ogg", ".mpeg"}
 ALLOWED_AUDIO_MIMES = {
     "audio/webm",
@@ -138,15 +144,36 @@ def transcribe_audio(
             "note": "Transcription disabled via LIFE_INBOX_DISABLE_TRANSCRIPTION.",
         }
 
+    gnani_note: Optional[str] = None
+    if gnani_configured():
+        try:
+            text = transcribe_with_gnani(
+                data, original_filename=original_filename
+            )
+            return {
+                "text": text,
+                "provider": "gnani",
+                "available": True,
+                "note": None if text else "Transcription returned no spoken text.",
+            }
+        except GnaniError as exc:
+            gnani_note = str(exc)
+            logger.warning("Gnani transcription failed: %s", gnani_note)
+        except Exception:
+            logger.exception("Unexpected Gnani transcription error")
+            gnani_note = _friendly_transcription_unavailable_note()
+
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         return {
             "text": "",
-            "provider": "none",
+            "provider": "unavailable" if gnani_note else "none",
             "available": False,
-            "note": (
-                "Transcription not configured. Set OPENAI_API_KEY for live "
-                "transcription, or edit the transcript manually."
+            "note": gnani_note
+            or (
+                "Transcription not configured. Set GNANI_API_KEY or "
+                "OPENAI_API_KEY for live transcription, or edit the "
+                "transcript manually."
             ),
         }
 
@@ -202,8 +229,9 @@ def process_voice_bytes(
     if transcript:
         raw_text = transcript
     else:
+        # Search, analysis and the assistant skip notes with this marker.
         raw_text = (
-            f"[Voice note — transcript pending]\n"
+            f"{PENDING_MARKER}\n"
             f"Filename: {original_filename}\n"
             f"{note or 'No transcript yet. Edit to add text.'}"
         )

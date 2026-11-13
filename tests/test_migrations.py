@@ -115,6 +115,26 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
         }
         assert "calendar_action_receipts" in set(inspector.get_table_names())
         assert {
+            column["name"] for column in inspector.get_columns("calendar_connections")
+        } == {
+            "id",
+            "user_id",
+            "google_email",
+            "scopes",
+            "refresh_token_enc",
+            "access_token_enc",
+            "access_token_expires_at",
+            "calendar_id",
+            "status",
+            "last_synced_at",
+            "last_error",
+            "connected_at",
+            "updated_at",
+        }
+        assert {
+            column["name"] for column in inspector.get_columns("calendar_task_events")
+        } == {"id", "user_id", "task_id", "event_id", "fingerprint", "synced_at"}
+        assert {
             column["name"] for column in inspector.get_columns("topics")
         } == {
             "id",
@@ -134,7 +154,7 @@ def test_upgrade_creates_inbox_items_in_empty_database(tmp_path, monkeypatch):
                 text("SELECT version_num FROM alembic_version")
             )
             topic_count = connection.scalar(text("SELECT COUNT(*) FROM topics"))
-        assert revision == "0017_api_tokens_webhooks"
+        assert revision == "0017_google_calendar"
         assert topic_count >= 9
     finally:
         engine.dispose()
@@ -235,7 +255,7 @@ def test_upgrade_adopts_legacy_database_without_changing_notes(
             for note_id, note_text, created_at in existing_notes
         ]
         assert next_id == 10
-        assert revision == "0017_api_tokens_webhooks"
+        assert revision == "0017_google_calendar"
     finally:
         engine.dispose()
 
@@ -321,7 +341,7 @@ def test_upgrade_consolidates_tasks_that_share_a_source(tmp_path, monkeypatch):
             )
         ]
         assert [tuple(link) for link in links] == [(1, 1)]
-        assert revision == "0017_api_tokens_webhooks"
+        assert revision == "0017_google_calendar"
 
         # Milestone 2 drops the one-task-per-source unique index so one
         # inbox item may source multiple durable tasks.
@@ -360,3 +380,65 @@ def test_upgrade_consolidates_tasks_that_share_a_source(tmp_path, monkeypatch):
         assert [tuple(link) for link in multi_links] == [(1, 1), (2, 1)]
     finally:
         engine.dispose()
+
+
+def test_topic_names_are_unique_per_owner_after_upgrade(tmp_path, monkeypatch):
+    """0007 created UNIQUE(name); a second user must still get "Work" etc."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    database_path = tmp_path / "topics.db"
+    config = alembic_config(database_path)
+    command.upgrade(config, "0012_google_auth_sessions")
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.executescript(
+            """
+            INSERT INTO users (email, display_name, auth_provider, created_at)
+                VALUES ('second@example.com', 'Second', 'google', 'now');
+            INSERT INTO inbox_items
+                (item_type, raw_text, processing_status, owner_user_id, created_at)
+                VALUES ('text', 'hello', 'ready', 1, 'now');
+            INSERT INTO analysis_runs (started_at, status, mode, owner_user_id)
+                VALUES ('now', 'succeeded', 'fallback', 1);
+            INSERT INTO item_insights
+                (item_id, analysis_run_id, category, concise_title, priority,
+                 topic_id, needs_review, updated_at)
+                VALUES (1, 1, 'Work', 'hello', 'Low',
+                        (SELECT id FROM topics WHERE name = 'Work'), 0, 'now');
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    command.upgrade(config, "head")
+
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute("PRAGMA foreign_keys=ON")
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        linked = connection.execute(
+            "SELECT t.name FROM item_insights i JOIN topics t ON t.id = i.topic_id"
+        ).fetchall()
+        assert linked == [("Work",)]
+        second_id = connection.execute(
+            "SELECT id FROM users WHERE email = 'second@example.com'"
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO topics (name, owner_user_id, created_at, updated_at, archived) "
+            "VALUES ('Work', ?, 'now', 'now', 0)",
+            (second_id,),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO topics (name, owner_user_id, created_at, updated_at, archived) "
+                "VALUES ('Work', ?, 'now', 'now', 0)",
+                (second_id,),
+            )
+        schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'topics'"
+        ).fetchone()[0]
+        assert "AUTOINCREMENT" in schema
+        assert "uq_topics_name_owner" in schema
+    finally:
+        connection.close()

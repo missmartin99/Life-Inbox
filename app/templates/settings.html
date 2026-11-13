@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0A0A0A" />
+  <script src="/static/theme.js"></script>
+  <title>Settings · Life Inbox</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://api.fontshare.com" />
+  <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@300;400&display=swap" />
+  <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@700&display=swap" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body class="profile-body">
+  <nav class="topnav" aria-label="Primary">
+    <div class="wrap nav-row">
+      <a class="brand" href="/">Life<span>Inbox</span></a>
+      <a class="back-link" href="/">← Back to inbox</a>
+    </div>
+  </nav>
+
+  <main class="wrap profile-page">
+    <header class="profile-header">
+      <p class="mono eyebrow-sm">Account</p>
+      <h1>Settings</h1>
+      <p class="sub">Changes save as soon as you make them.</p>
+    </header>
+
+    <section class="panel profile-section" aria-labelledby="notifyTitle">
+      <h3 id="notifyTitle">Notification settings</h3>
+      <label class="switch-row">
+        <span class="switch-text">
+          <span class="switch-title">Show the number on the bell</span>
+          <span class="hint">How many tasks are pending, next to the bell.</span>
+        </span>
+        <input id="bellBadge" type="checkbox" class="switch" data-setting="bell_badge">
+      </label>
+      <label class="switch-row">
+        <span class="switch-text">
+          <span class="switch-title">Turn the bell red when something is overdue</span>
+          <span class="hint">So late tasks stand out.</span>
+        </span>
+        <input id="bellOverdue" type="checkbox" class="switch" data-setting="bell_overdue_alert">
+      </label>
+      <fieldset class="choice-group">
+        <legend>What the bell shows</legend>
+        <label class="choice">
+          <input type="radio" name="bell_scope" value="all">
+          <span><span class="choice-title">All pending tasks</span><span class="hint">Every open task, high to low priority.</span></span>
+        </label>
+        <label class="choice">
+          <input type="radio" name="bell_scope" value="due_soon">
+          <span><span class="choice-title">Only overdue and due today</span><span class="hint">What needs you now.</span></span>
+        </label>
+        <label class="choice">
+          <input type="radio" name="bell_scope" value="high">
+          <span><span class="choice-title">Only high priority</span><span class="hint">The tasks that matter most.</span></span>
+        </label>
+      </fieldset>
+    </section>
+
+    <section class="panel profile-section" aria-labelledby="themeTitle">
+      <h3 id="themeTitle">Theme preferences</h3>
+      <fieldset class="theme-options">
+        <legend class="visually-hidden">Theme</legend>
+        <label class="theme-card">
+          <input type="radio" name="theme" value="dark">
+          <span class="theme-swatch swatch-dark" aria-hidden="true"></span>
+          <span class="choice-title">Dark</span>
+        </label>
+        <label class="theme-card">
+          <input type="radio" name="theme" value="light">
+          <span class="theme-swatch swatch-light" aria-hidden="true"></span>
+          <span class="choice-title">Light</span>
+        </label>
+        <label class="theme-card">
+          <input type="radio" name="theme" value="system">
+          <span class="theme-swatch swatch-system" aria-hidden="true"></span>
+          <span class="choice-title">Match my device</span>
+        </label>
+      </fieldset>
+      <p class="hint">Saved to your account, so it follows you to other devices.</p>
+    </section>
+
+    <section class="panel profile-section" aria-labelledby="appsTitle">
+      <h3 id="appsTitle">Connected apps</h3>
+      <div id="appsList" class="apps-list"></div>
+    </section>
+
+    <p id="settingsStatus" class="status settings-status" role="status" aria-live="polite"></p>
+  </main>
+
+  <script src="/static/settings.js" defer></script>
+</body>
+</html>

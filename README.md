@@ -334,6 +334,16 @@ Then open:
 
 Stop the server by pressing `Control+C` in the terminal.
 
+### Sign-in
+
+By default (`LIFE_INBOX_AUTH_MODE=dev`, local only) you are the built-in
+Local Owner and no sign-in is needed. To use real Google sign-in, set
+`LIFE_INBOX_AUTH_MODE=google`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and
+`LIFE_INBOX_PUBLIC_URL` (template in `.env.example`). Google setup steps,
+beta requirements, and how to move your existing Local Owner inbox to your
+Google account (`python -m scripts.claim_local_data`) are in
+[docs/deployment.md](docs/deployment.md).
+
 ## 6. Run the automated tests
 
 From the top-level `life-inbox` folder, run:

@@ -56,6 +56,10 @@ def load_passages(
     for item in items:
         if item.get("processing_status") not in {None, "ready"}:
             continue
+        if (item.get("raw_text") or "").startswith(
+            "[Voice note — transcript pending]"
+        ) and not item.get("extracted_text"):
+            continue  # untranscribed recording: nothing real to search
         title = item.get("title") or item.get("original_filename") or f"Item {item['id']}"
         preview_url = None
         if item.get("item_type") == "pdf" and item.get("storage_path"):
